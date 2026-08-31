@@ -1,0 +1,61 @@
+[
+  {
+    "name": "Safe Known Regression Rollback",
+    "description": "Allow automatic rollback when high-confidence known regression detected with low blast radius",
+    "is_active": true,
+    "priority": 100,
+    "conditions": {
+      "confidence": {"op": "gte", "value": 0.90},
+      "blast_radius": "low",
+      "reversible": true,
+      "deployment_regression": true,
+      "dependencies_healthy": true,
+      "verification_available": true
+    },
+    "action": "allow",
+    "target_resource": "runbook"
+  },
+  {
+    "name": "Medium Confidence Requires Approval",
+    "description": "Require human approval when confidence is moderate or blast radius is significant",
+    "is_active": true,
+    "priority": 50,
+    "conditions": {
+      "confidence": {"op": "gte", "value": 0.60},
+      "blast_radius": {"op": "in", "value": ["low", "medium"]}
+    },
+    "action": "require_approval",
+    "target_resource": "runbook"
+  },
+  {
+    "name": "High Blast Radius Always Requires Approval",
+    "description": "High or critical blast radius always requires human approval",
+    "is_active": true,
+    "priority": 200,
+    "conditions": {
+      "blast_radius": {"op": "in", "value": ["high", "critical"]}
+    },
+    "action": "require_approval",
+    "target_resource": "runbook"
+  },
+  {
+    "name": "Low Confidence Deny",
+    "description": "Deny actions when confidence is below 40%",
+    "is_active": true,
+    "priority": 150,
+    "conditions": {
+      "confidence": {"op": "lt", "value": 0.40}
+    },
+    "action": "deny",
+    "target_resource": "runbook"
+  },
+  {
+    "name": "Default Incident Policy",
+    "description": "Default policy for incident management — always require approval",
+    "is_active": true,
+    "priority": 0,
+    "conditions": {},
+    "action": "require_approval",
+    "target_resource": "incident"
+  }
+]
