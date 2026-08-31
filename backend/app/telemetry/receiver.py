@@ -72,9 +72,10 @@ class TelemetryReceiver:
     MAX_BATCH_SIZE = 50
     MAX_EVENT_SIZE = 10_000  # characters
 
-    async def receive_batch(self, batch: TelemetryBatch) -> dict:
+    async def receive_batch(self, batch: TelemetryBatch, session=None) -> dict:
         """
         Process a batch of telemetry events.
+        If a session is provided, events are persisted to the event spine.
         Returns a summary of processed events.
         """
         processed = 0
@@ -85,7 +86,10 @@ class TelemetryReceiver:
 
         for telemetry in events:
             try:
-                await self._process_telemetry(telemetry, batch)
+                envelope = await self._process_telemetry(telemetry, batch)
+                if session and envelope:
+                    from app.events.spine import event_processor
+                    await event_processor.process_event(envelope, session)
                 processed += 1
             except Exception:
                 errors += 1
@@ -141,8 +145,6 @@ class TelemetryReceiver:
             },
         )
 
-        # The event will be persisted by the ingestion endpoint
-        # Here we just validate and transform
         return envelope
 
     def _map_telemetry_to_event_type(self, telemetry: TelemetryPayload) -> str:

@@ -5,6 +5,7 @@ The control plane for developer operations.
 Event-driven architecture — the UI does not own system state.
 """
 
+import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -39,6 +40,13 @@ async def lifespan(app: FastAPI):
     healthy = await db_manager.health_check()
     if healthy:
         logger.info("Database connection established")
+        # Seed default data (runbooks, policies, providers)
+        try:
+            from app.database.seeds import run_all_seeds
+            async with db_manager.get_session() as session:
+                await run_all_seeds(session)
+        except Exception as e:
+            logger.warning("seed_error", error=str(e))
     else:
         logger.warning(
             "Database not available — running in degraded mode",
@@ -65,14 +73,27 @@ def create_app() -> FastAPI:
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-    # CORS
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"] if settings.app_debug else [],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # CORS — strict in production, permissive in development
+    if settings.app_debug:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    else:
+        frontend_origin = os.environ.get("FRONTEND_ORIGIN", "")
+        allowed_origins = [o.strip() for o in frontend_origin.split(",") if o.strip()]
+        if not allowed_origins:
+            allowed_origins = ["https://hi.myrepo.vercel.app"]
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PATCH", "DELETE"],
+            allow_headers=["Authorization", "Content-Type"],
+        )
 
     # Request ID middleware
     @app.middleware("http")

@@ -15,7 +15,7 @@ export default function AIGateway() {
 
   async function loadProviders() {
     try {
-      const res = await fetch(`${API}/../providers`, { headers: authHeaders() })
+      const res = await fetch('/v1/providers', { headers: authHeaders() })
       if (res.ok) setProviders(await res.json())
     } catch (e) { console.error(e) }
     finally { setLoading(false) }

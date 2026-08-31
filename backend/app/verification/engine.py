@@ -101,7 +101,7 @@ class VerificationEngine:
         consecutive_passes = 0
 
         for check in plan.checks:
-            check_result = await self._execute_check(check)
+            check_result = await self._execute_check(check, session=session, incident_id=plan.incident_id)
             checks_performed.append(check_result)
 
             if check_result["success"]:
@@ -146,7 +146,12 @@ class VerificationEngine:
             error_message=verification.error_message,
         )
 
-    async def _execute_check(self, check: VerificationCheck) -> dict:
+    async def _execute_check(
+        self,
+        check: VerificationCheck,
+        session: Optional[AsyncSession] = None,
+        incident_id: Optional[uuid.UUID] = None,
+    ) -> dict:
         """Execute a single verification check."""
         import httpx
 
@@ -168,14 +173,43 @@ class VerificationEngine:
                         "status_code": response.status_code,
                         "latency_ms": response.elapsed.total_seconds() * 1000,
                     }
-                    # Check if status is in acceptable range (2xx)
                     result["success"] = 200 <= response.status_code < 300
 
+            elif check.check_type == "error_rate" and session and incident_id:
+                # Query the event store for ERROR_DETECTED events since incident creation
+                from sqlalchemy import func
+                from app.database.models import Incident
+
+                inc_result = await session.execute(
+                    select(Incident).where(Incident.id == incident_id)
+                )
+                incident = inc_result.scalar_one_or_none()
+
+                if incident:
+                    # Count errors for this project since incident was detected
+                    error_count = (await session.execute(
+                        select(func.count()).where(
+                            Event.project_id == incident.project_id,
+                            Event.event_type == "ERROR_DETECTED",
+                            Event.received_at >= incident.detected_at,
+                        )
+                    )).scalar() or 0
+
+                    threshold = check.threshold or 5.0  # default: max 5 errors allowed
+                    result["details"] = {
+                        "error_count": error_count,
+                        "threshold": threshold,
+                        "incident_id": str(incident_id),
+                    }
+                    result["success"] = error_count <= threshold
+                else:
+                    result["details"]["note"] = "Incident not found — cannot check error rate"
+                    result["success"] = False
+
             elif check.check_type == "error_rate":
-                # Error rate check requires external data
-                # In production, this would query the event store
-                result["success"] = True  # Default to pass if no data
-                result["details"] = {"note": "Error rate check requires event store integration"}
+                # No session/incident — cannot perform error rate check
+                result["details"]["note"] = "Error rate check requires incident context"
+                result["success"] = False
 
             elif check.check_type == "response_time":
                 if check.target_url:

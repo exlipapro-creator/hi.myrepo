@@ -35,8 +35,9 @@ async def ingest_telemetry(
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
-    # Process the batch
-    summary = await telemetry_receiver.receive_batch(batch)
+    # Process the batch with database session for persistence
+    async with db_manager.get_session() as session:
+        summary = await telemetry_receiver.receive_batch(batch, session=session)
 
     return {
         "status": "accepted",
@@ -56,7 +57,8 @@ async def ingest_error(
         events=[error],
         project_id=project_id,
     )
-    summary = await telemetry_receiver.receive_batch(batch)
+    async with db_manager.get_session() as session:
+        summary = await telemetry_receiver.receive_batch(batch, session=session)
     return {
         "status": "accepted",
         "processed": summary["processed"],
