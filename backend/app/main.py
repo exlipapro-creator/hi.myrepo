@@ -52,10 +52,46 @@ async def lifespan(app: FastAPI):
             "Database not available — running in degraded mode",
             hint="Set DATABASE_URL in .env",
         )
+
+    # Validate configuration
+    config_issues = _validate_config()
+    if config_issues:
+        for issue in config_issues:
+            logger.warning("config_issue", issue=issue)
+    else:
+        logger.info("configuration_valid")
+
     yield
     # Shutdown: close connections
     await db_manager.close()
     logger.info("hi.myrepo shutting down")
+
+
+def _validate_config() -> list[str]:
+    """Validate required configuration. Returns list of issues (empty = valid)."""
+    issues = []
+
+    # JWT secret must not be default
+    if settings.jwt_secret == "change-me":
+        issues.append("JWT_SECRET is default value — generate a secure random string")
+
+    # App secret key must not be default
+    if settings.app_secret_key == "change-me":
+        issues.append("APP_SECRET_KEY is default value — generate a secure random string")
+
+    # Database URL should be set
+    if not settings.database_url:
+        issues.append("DATABASE_URL not configured")
+
+    # In production, require at least one AI provider
+    if settings.is_production and not settings.available_ai_providers:
+        issues.append("No AI providers configured — set GEMINI_API_KEY, OPENAI_API_KEY, or GROQ_API_KEY")
+
+    # In production, CORS should not be wildcard
+    if settings.is_production and not os.environ.get("FRONTEND_ORIGIN"):
+        issues.append("FRONTEND_ORIGIN not set — CORS will default to https://hi.myrepo.vercel.app")
+
+    return issues
 
 
 def create_app() -> FastAPI:
@@ -136,15 +172,45 @@ def create_app() -> FastAPI:
 
     # ── Routes ───────────────────────────────────────────────────────────
 
-    # Health check (unauthenticated)
+    # ── Health endpoints (unauthenticated) ──────────────────────────────
+
     @app.get("/health")
     @limiter.exempt
     async def health_check():
-        db_healthy = await db_manager.health_check()
+        """Liveness probe — is the process alive?"""
         return {
-            "status": "healthy" if db_healthy else "degraded",
-            "database": "connected" if db_healthy else "disconnected",
+            "status": "alive",
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "version": "0.1.0",
+        }
+
+    @app.get("/ready")
+    @limiter.exempt
+    async def readiness_check():
+        """Readiness probe — can the system serve traffic?"""
+        checks = {}
+        overall = "ready"
+
+        # Database
+        db_healthy = await db_manager.health_check()
+        checks["database"] = "connected" if db_healthy else "disconnected"
+        if not db_healthy:
+            overall = "not_ready"
+
+        # Configuration
+        config_issues = _validate_config()
+        checks["configuration"] = config_issues if config_issues else "valid"
+        if config_issues:
+            overall = "not_ready"
+
+        # AI providers
+        available_providers = settings.available_ai_providers
+        checks["ai_providers"] = available_providers if available_providers else ["none_configured"]
+
+        return {
+            "status": overall,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "checks": checks,
             "version": "0.1.0",
         }
 
