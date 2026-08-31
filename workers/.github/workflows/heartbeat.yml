@@ -1,0 +1,64 @@
+# ============================================================================
+# hi.myrepo - Heartbeat Worker
+# Scheduled health checks via GitHub Actions
+# ============================================================================
+
+name: Heartbeat Monitor
+
+on:
+  schedule:
+    # Run every minute
+    - cron: '* * * * *'
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'API URL to check'
+        required: false
+        default: ''
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install httpx
+
+      - name: Run heartbeat checks
+        env:
+          API_URL: ${{ secrets.API_URL || 'http://localhost:8000' }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+        run: python workers/scripts/heartbeat.py
+
+      - name: Emit failure event (if needed)
+        if: failure()
+        env:
+          API_URL: ${{ secrets.API_URL || 'http://localhost:8000' }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+        run: |
+          if [ -n "$API_TOKEN" ]; then
+            curl -s -X POST "$API_URL/api/v1/events" \
+              -H "Authorization: Bearer $API_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "event_type": "HEARTBEAT_FAILURE",
+                "source": "github-actions",
+                "source_type": "worker",
+                "project_id": "'"$PROJECT_ID"'",
+                "severity": "high",
+                "payload": {
+                  "workflow": "heartbeat",
+                  "run_id": "'"$GITHUB_RUN_ID"'",
+                  "error": "Heartbeat workflow failed"
+                }
+              }'
+          fi
