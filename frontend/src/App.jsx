@@ -3,6 +3,7 @@ import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
 import Auth from './views/Auth.jsx'
 import Dashboard from './views/Dashboard.jsx'
 import Incidents from './views/Incidents.jsx'
+import IncidentDetail from './views/IncidentDetail.jsx'
 import Events from './views/Events.jsx'
 import Projects from './views/Projects.jsx'
 import AIGateway from './views/AIGateway.jsx'
@@ -79,6 +80,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/incidents" element={<Incidents />} />
+          <Route path="/incidents/:id" element={<IncidentDetail />} />
           <Route path="/events" element={<Events />} />
           <Route path="/projects" element={<Projects />} />
           <Route path="/ai-gateway" element={<AIGateway />} />

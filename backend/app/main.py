@@ -179,6 +179,17 @@ def create_app() -> FastAPI:
     app.include_router(audit_router, prefix="/api/v1/audit", tags=["Audit Logs"])
     app.include_router(memory_router, prefix="/api/v1/memory", tags=["Memory"])
 
+    # New routes
+    from app.api.webhooks import router as webhooks_router
+    from app.api.monitored_targets import router as targets_router
+    from app.api.deployments import router as deployments_router
+    from app.api.incident_detail import router as incident_detail_router
+
+    app.include_router(webhooks_router, prefix="/webhooks", tags=["Webhooks"])
+    app.include_router(targets_router, prefix="/api/v1/monitored-targets", tags=["Monitored Targets"])
+    app.include_router(deployments_router, prefix="/api/v1/deployments", tags=["Deployments"])
+    app.include_router(incident_detail_router, prefix="/api/v1/incidents", tags=["Incident Detail"])
+
     return app
 
 

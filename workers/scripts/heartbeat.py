@@ -40,12 +40,9 @@ HEADERS = {
 async def get_monitored_targets(client: httpx.AsyncClient) -> list[dict]:
     """Fetch monitored targets from the API."""
     try:
-        response = await client.get(f"{API_URL}/api/v1/projects", headers=HEADERS)
+        response = await client.get(f"{API_URL}/api/v1/monitored-targets", headers=HEADERS)
         if response.status_code == 200:
-            projects = response.json()
-            # In a real implementation, each project would have monitored targets
-            # For now, return empty list
-            return []
+            return response.json()
         else:
             print(f"Failed to fetch targets: {response.status_code}")
             return []

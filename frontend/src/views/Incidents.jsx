@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { formatDistanceToNow } from 'date-fns'
 
 const API = '/api/v1'
@@ -91,7 +92,7 @@ export default function Incidents() {
               <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No incidents found</td></tr>
             ) : (
               incidents.map(inc => (
-                <tr key={inc.id}>
+                <tr key={inc.id} style={{ cursor: 'pointer' }} onClick={() => window.location.href = `/incidents/${inc.id}`}>
                   <td><span className={`severity-badge ${inc.severity}`}>{inc.severity}</span></td>
                   <td className="mono" style={{ fontSize: '12px' }}>{inc.status}</td>
                   <td>{inc.title || inc.fingerprint || '—'}</td>

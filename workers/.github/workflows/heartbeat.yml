@@ -8,7 +8,7 @@ name: Heartbeat Monitor
 on:
   schedule:
     # Run every minute
-    - cron: '* * * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
     inputs:
       api_url:
