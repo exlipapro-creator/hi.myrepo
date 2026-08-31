@@ -25,7 +25,7 @@ from app.database.models import (
     RunbookExecution,
     VerificationRun,
 )
-from app.security.auth import TokenData, get_current_user
+from app.security.auth import TokenData, get_current_user, require_project_access
 
 router = APIRouter()
 
@@ -55,6 +55,8 @@ async def get_incident_full(
         incident = result.scalar_one_or_none()
         if not incident:
             raise HTTPException(status_code=404, detail="Incident not found")
+        # Verify project access
+        await require_project_access(incident.project_id, user)
 
         # Get related events
         events_result = await session.execute(

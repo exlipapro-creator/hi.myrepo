@@ -5,6 +5,7 @@ JWT-based authentication with role-based access control.
 Secrets are NEVER hardcoded — loaded from environment.
 """
 
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -131,3 +132,73 @@ def require_autonomy_level(min_level: int):
         return user
 
     return autonomy_checker
+
+
+async def require_project_access(
+    project_id: uuid.UUID,
+    user: TokenData = Depends(get_current_user),
+) -> TokenData:
+    """
+    Verify the authenticated user's organization owns the specified project.
+
+    This is the project-level authorization boundary.
+    Every protected resource must check that the user's organization
+    owns the project they are trying to access.
+
+    Never trust project_id from the browser — always verify server-side.
+    """
+    import uuid as _uuid
+    from sqlalchemy import select
+    from app.database.connection import db_manager
+    from app.database.models import Project
+
+    async with db_manager.get_session() as session:
+        result = await session.execute(
+            select(Project).where(Project.id == project_id)
+        )
+        project = result.scalar_one_or_none()
+
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found",
+            )
+
+        if str(project.organization_id) != user.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: project belongs to another organization",
+            )
+
+    return user
+
+
+async def require_incident_access(
+    incident_id: uuid.UUID,
+    user: TokenData = Depends(get_current_user),
+):
+    """
+    Verify the authenticated user's organization owns the incident's project.
+
+    Returns (user, incident) tuple so callers can use the incident object.
+    """
+    from sqlalchemy import select
+    from app.database.connection import db_manager
+    from app.database.models import Incident
+
+    async with db_manager.get_session() as session:
+        result = await session.execute(
+            select(Incident).where(Incident.id == incident_id)
+        )
+        incident = result.scalar_one_or_none()
+
+        if not incident:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Incident not found",
+            )
+
+        # Check project access
+        await require_project_access(incident.project_id, user)
+
+    return user, incident

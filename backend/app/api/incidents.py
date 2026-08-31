@@ -19,7 +19,7 @@ from app.database.models import (
     IncidentStateTransition,
 )
 from app.incidents.engine import IncidentCreate, incident_engine
-from app.security.auth import TokenData, get_current_user
+from app.security.auth import TokenData, get_current_user, require_project_access
 
 router = APIRouter()
 
@@ -56,7 +56,7 @@ class IncidentStatsResponse(BaseModel):
 @router.post("", status_code=201)
 async def create_incident(
     req: IncidentCreate,
-    user: TokenData = Depends(get_current_user),
+    user: TokenData = Depends(require_project_access),
 ):
     """Create a new incident."""
     async with db_manager.get_session() as session:
@@ -79,6 +79,8 @@ async def list_incidents(
     user: TokenData = Depends(get_current_user),
 ):
     """List incidents with filtering."""
+    if project_id:
+        await require_project_access(project_id, user)
     async with db_manager.get_session() as session:
         query = select(Incident)
 
@@ -120,6 +122,8 @@ async def incident_stats(
     project_id: uuid.UUID | None = None,
     user: TokenData = Depends(get_current_user),
 ):
+    if project_id:
+        await require_project_access(project_id, user)
     """Get incident statistics."""
     async with db_manager.get_session() as session:
         base = select(Incident)
@@ -162,6 +166,8 @@ async def get_incident(
         incident = result.scalar_one_or_none()
         if not incident:
             raise HTTPException(status_code=404, detail="Incident not found")
+        # Verify project access
+        await require_project_access(incident.project_id, user)
 
         return IncidentResponse(
             id=str(incident.id),
@@ -190,6 +196,15 @@ async def transition_incident(
 ):
     """Transition an incident to a new state."""
     async with db_manager.get_session() as session:
+        # Verify incident exists and user has access
+        result = await session.execute(
+            select(Incident).where(Incident.id == incident_id)
+        )
+        incident = result.scalar_one_or_none()
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        await require_project_access(incident.project_id, user)
+
         try:
             incident = await incident_engine.transition(
                 incident_id=incident_id,
@@ -213,6 +228,15 @@ async def get_incident_analysis(
 ):
     """Get council analysis for an incident."""
     async with db_manager.get_session() as session:
+        # Verify incident exists and user has access
+        inc_result = await session.execute(
+            select(Incident).where(Incident.id == incident_id)
+        )
+        incident = inc_result.scalar_one_or_none()
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        await require_project_access(incident.project_id, user)
+
         result = await session.execute(
             select(IncidentAnalysis)
             .where(IncidentAnalysis.incident_id == incident_id)

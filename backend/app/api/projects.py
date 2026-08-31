@@ -22,7 +22,7 @@ from app.database.models import (
     MonitoredTarget,
     Project,
 )
-from app.security.auth import TokenData, get_current_user
+from app.security.auth import TokenData, get_current_user, require_project_access
 
 router = APIRouter()
 
@@ -151,7 +151,7 @@ async def list_projects(
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(
     project_id: uuid.UUID,
-    user: TokenData = Depends(get_current_user),
+    user: TokenData = Depends(require_project_access),
 ):
     """Get a single project."""
     async with db_manager.get_session() as session:
@@ -180,7 +180,7 @@ async def get_project(
 async def update_project(
     project_id: uuid.UUID,
     req: ProjectUpdate,
-    user: TokenData = Depends(get_current_user),
+    user: TokenData = Depends(require_project_access),
 ):
     """Update a project."""
     async with db_manager.get_session() as session:
@@ -222,7 +222,7 @@ async def update_project(
 @router.get("/{project_id}/health", response_model=ProjectHealthResponse)
 async def project_health(
     project_id: uuid.UUID,
-    user: TokenData = Depends(get_current_user),
+    user: TokenData = Depends(require_project_access),
 ):
     """Get project health summary."""
     async with db_manager.get_session() as session:

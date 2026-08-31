@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from app.database.connection import db_manager
 from app.database.models import Project
-from app.security.auth import TokenData, get_current_user
+from app.security.auth import TokenData, get_current_user, require_project_access
 from app.telemetry.receiver import TelemetryBatch, TelemetryPayload, telemetry_receiver
 
 router = APIRouter()
@@ -19,7 +19,7 @@ router = APIRouter()
 @router.post("/ingest", status_code=202)
 async def ingest_telemetry(
     batch: TelemetryBatch,
-    user: TokenData = Depends(get_current_user),
+    user: TokenData = Depends(require_project_access),
 ):
     """Ingest a batch of telemetry events from clients.
 
@@ -50,7 +50,7 @@ async def ingest_telemetry(
 async def ingest_error(
     error: TelemetryPayload,
     project_id: uuid.UUID,
-    user: TokenData = Depends(get_current_user),
+    user: TokenData = Depends(require_project_access),
 ):
     """Ingest a single error telemetry event."""
     batch = TelemetryBatch(

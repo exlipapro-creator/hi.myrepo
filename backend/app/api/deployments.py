@@ -17,7 +17,7 @@ from app.database.connection import db_manager
 from app.database.models import Deployment, Project
 from app.events.spine import EventEnvelope
 from app.pipeline.orchestrator import pipeline
-from app.security.auth import TokenData, get_current_user
+from app.security.auth import TokenData, get_current_user, require_project_access
 
 router = APIRouter()
 
@@ -51,7 +51,7 @@ class DeploymentResponse(BaseModel):
 @router.post("", status_code=201)
 async def record_deployment(
     req: DeploymentCreate,
-    user: TokenData = Depends(get_current_user),
+    user: TokenData = Depends(require_project_access),
 ):
     """Record a deployment event."""
     async with db_manager.get_session() as session:
@@ -138,6 +138,8 @@ async def list_deployments(
     user: TokenData = Depends(get_current_user),
 ):
     """List deployments."""
+    if project_id:
+        await require_project_access(project_id, user)
     async with db_manager.get_session() as session:
         query = select(Deployment)
         if project_id:

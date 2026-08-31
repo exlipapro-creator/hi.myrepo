@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from app.database.connection import db_manager
 from app.database.models import MonitoredTarget, Project
-from app.security.auth import TokenData, get_current_user
+from app.security.auth import TokenData, get_current_user, require_project_access
 
 router = APIRouter()
 
@@ -62,7 +62,7 @@ class MonitoredTargetResponse(BaseModel):
 @router.post("", status_code=201)
 async def create_target(
     req: MonitoredTargetCreate,
-    user: TokenData = Depends(get_current_user),
+    user: TokenData = Depends(require_project_access),
 ):
     """Create a new monitored target."""
     # Validate URL against SSRF before storing
@@ -120,6 +120,8 @@ async def list_targets(
     user: TokenData = Depends(get_current_user),
 ):
     """List monitored targets."""
+    if project_id:
+        await require_project_access(project_id, user)
     async with db_manager.get_session() as session:
         query = select(MonitoredTarget)
         if project_id:

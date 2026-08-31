@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.connection import db_manager
 from app.database.models import Event
 from app.events.spine import EventEnvelope, EventProcessor, event_processor
-from app.security.auth import TokenData, get_current_user
+from app.security.auth import TokenData, get_current_user, require_project_access
 
 router = APIRouter()
 
@@ -65,9 +65,10 @@ class EventStatsResponse(BaseModel):
 @router.post("", status_code=201)
 async def ingest_event(
     req: EventIngestRequest,
-    user: TokenData = Depends(get_current_user),
+    user: TokenData = Depends(require_project_access),
 ):
     """Ingest a single event into the event spine."""
+    # Note: require_project_access verified req.project_id belongs to user's org
     from datetime import datetime, timezone
 
     occurred_at = datetime.now(timezone.utc)
@@ -111,6 +112,10 @@ async def ingest_events_batch(
     user: TokenData = Depends(get_current_user),
 ):
     """Ingest a batch of events."""
+    # Verify project access for all events in batch
+    if req.events:
+        for event_req in req.events:
+            await require_project_access(event_req.project_id, user)
     from datetime import datetime, timezone
 
     results = []
@@ -162,6 +167,9 @@ async def list_events(
     user: TokenData = Depends(get_current_user),
 ):
     """Query events with filtering."""
+    # Verify project access if project_id specified
+    if project_id:
+        await require_project_access(project_id, user)
     async with db_manager.get_session() as session:
         query = select(Event)
 
@@ -212,6 +220,9 @@ async def event_stats(
     project_id: Optional[uuid.UUID] = None,
     user: TokenData = Depends(get_current_user),
 ):
+    # Verify project access if project_id specified
+    if project_id:
+        await require_project_access(project_id, user)
     """Get event statistics."""
     async with db_manager.get_session() as session:
         base_query = select(Event)
