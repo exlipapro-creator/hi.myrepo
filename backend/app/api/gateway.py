@@ -37,26 +37,29 @@ async def chat_completions(
 async def list_providers(
     user: TokenData = Depends(get_current_user),
 ):
-    """Get AI provider health and status."""
-    async with db_manager.get_session() as session:
-        result = await session.execute(select(AIProvider))
-        providers = result.scalars().all()
+    """Get AI provider health and status. Gracefully degrades if DB unavailable."""
+    try:
+        async with db_manager.get_session() as session:
+            result = await session.execute(select(AIProvider))
+            providers = result.scalars().all()
 
-        return [
-            {
-                "name": p.name,
-                "status": p.status,
-                "circuit_state": p.circuit_state,
-                "success_rate": p.success_rate,
-                "failure_rate": p.failure_rate,
-                "avg_latency_ms": p.avg_latency_ms,
-                "total_requests": p.total_requests,
-                "total_failures": p.total_failures,
-                "recent_429_count": p.recent_429_count,
-                "recent_timeout_count": p.recent_timeout_count,
-                "cooldown_until": p.cooldown_until.isoformat() if p.cooldown_until else None,
-                "capabilities": p.capabilities or [],
-                "models_available": p.models_available or [],
-            }
-            for p in providers
-        ]
+            return [
+                {
+                    "name": p.name,
+                    "status": p.status,
+                    "circuit_state": p.circuit_state,
+                    "success_rate": p.success_rate,
+                    "failure_rate": p.failure_rate,
+                    "avg_latency_ms": p.avg_latency_ms,
+                    "total_requests": p.total_requests,
+                    "total_failures": p.total_failures,
+                    "recent_429_count": p.recent_429_count,
+                    "recent_timeout_count": p.recent_timeout_count,
+                    "cooldown_until": p.cooldown_until.isoformat() if p.cooldown_until else None,
+                    "capabilities": p.capabilities or [],
+                    "models_available": p.models_available or [],
+                }
+                for p in providers
+            ]
+    except Exception:
+        return []

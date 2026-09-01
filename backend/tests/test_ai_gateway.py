@@ -398,7 +398,7 @@ class TestProviderConfig:
         assert config is not None
         assert "base_url" in config
         assert "models" in config
-        assert "gemini-2.5-flash" in config["models"]
+        assert "gemini-3.5-flash" in config["models"]
 
     def test_openai_config_exists(self):
         config = ProviderConfig.get_config("openai")
@@ -415,7 +415,7 @@ class TestProviderConfig:
 
     def test_default_model(self):
         model = ProviderConfig.get_default_model("gemini")
-        assert model == "gemini-2.5-flash"
+        assert model == "gemini-3.5-flash"
 
     def test_all_providers(self):
         providers = ProviderConfig.get_all_providers()

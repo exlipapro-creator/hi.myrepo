@@ -5,11 +5,6 @@ OpenAI-compatible interface with capability routing, provider state tracking,
 circuit breakers, and cost/quotawareness.
 
 Application → hi.myrepo AI Gateway → Capability Router → Provider Pool
-
-Architecture:
-    Client → /v1/chat/completions → Authentication → AI Gateway →
-    Capability Router → Provider → Provider Adapter / Normalizer →
-    OpenAI-compatible response
 """
 
 import asyncio
@@ -48,9 +43,8 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = 1024
     top_p: Optional[float] = None
     stream: bool = False
-    # Custom extensions for capability routing
     required_capabilities: list[str] = Field(default_factory=lambda: ["text"])
-    priority: str = "normal"  # low, normal, high, critical
+    priority: str = "normal"
 
 
 class ChatCompletionResponse(BaseModel):
@@ -60,7 +54,6 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: list[dict]
     usage: Optional[dict] = None
-    # Gateway extensions
     provider: Optional[str] = None
     latency_ms: Optional[float] = None
     cascade_count: Optional[int] = None
@@ -79,12 +72,7 @@ class CircuitState(str, Enum):
 class CircuitBreaker:
     """Per-provider circuit breaker with asyncio-safe state transitions."""
 
-    def __init__(
-        self,
-        failure_threshold: int = 5,
-        recovery_timeout: int = 60,
-        half_open_max_calls: int = 3,
-    ):
+    def __init__(self, failure_threshold: int = 5, recovery_timeout: int = 60, half_open_max_calls: int = 3):
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self.half_open_max_calls = half_open_max_calls
@@ -93,11 +81,9 @@ class CircuitBreaker:
         self._success_count = 0
         self._last_failure_time: Optional[float] = None
         self._half_open_calls = 0
-        self._lock = asyncio.Lock()
 
     @property
     def state(self) -> CircuitState:
-        """Check if OPEN circuit should transition to HALF_OPEN."""
         if self._state == CircuitState.OPEN:
             if self._last_failure_time:
                 elapsed = time.time() - self._last_failure_time
@@ -108,7 +94,6 @@ class CircuitBreaker:
         return self._state
 
     def record_success(self):
-        """Record a successful call."""
         if self._state == CircuitState.HALF_OPEN:
             self._success_count += 1
             if self._success_count >= self.half_open_max_calls:
@@ -116,31 +101,20 @@ class CircuitBreaker:
                 self._failure_count = 0
                 self._success_count = 0
                 self._half_open_calls = 0
-                logger.info("circuit_breaker_closed", state="closed")
         elif self._state == CircuitState.CLOSED:
-            # Decay failure count on success
             self._failure_count = max(0, self._failure_count - 1)
 
     def record_failure(self):
-        """Record a failed call."""
         self._failure_count += 1
         self._last_failure_time = time.time()
         if self._state == CircuitState.HALF_OPEN:
-            # Any failure in HALF_OPEN re-opens the circuit
             self._state = CircuitState.OPEN
             self._success_count = 0
             self._half_open_calls = 0
-            logger.warning("circuit_breaker_reopened", state="open")
         elif self._failure_count >= self.failure_threshold:
             self._state = CircuitState.OPEN
-            logger.warning(
-                "circuit_breaker_opened",
-                failure_count=self._failure_count,
-                threshold=self.failure_threshold,
-            )
 
     def can_execute(self) -> bool:
-        """Check if a call is allowed."""
         state = self.state
         if state == CircuitState.CLOSED:
             return True
@@ -163,13 +137,8 @@ class ProviderConfig:
         "gemini": {
             "base_url": "https://generativelanguage.googleapis.com/v1beta",
             "api_key_env": "gemini_api_key",
-            "models": [
-                "gemini-2.5-flash",
-                "gemini-2.5-pro",
-                "gemini-3.5-flash",
-                "gemini-3.5-flash-lite",
-            ],
-            "default_model": "gemini-2.5-flash",
+            "models": ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.7-flash"],
+            "default_model": "gemini-3.5-flash",
             "capabilities": ["text", "vision", "reasoning", "code", "long_context"],
             "timeout": 30,
         },
@@ -223,69 +192,40 @@ class FailureType(str, Enum):
 
 
 def classify_failure(status_code: int, error_message: str) -> FailureType:
-    """
-    Classify an AI provider failure with fine-grained categories.
-
-    IMPORTANT: Do NOT classify every 400/403/404 as authentication failure.
-    A 404 can mean invalid model, wrong endpoint, or unavailable model.
-    """
+    """Classify an AI provider failure with fine-grained categories."""
     error_lower = error_message.lower()
-
-    # 429 — Rate limit (always retryable after cooldown)
     if status_code == 429:
         return FailureType.RATE_LIMIT
-
-    # 408 — Request timeout
     if status_code == 408:
         return FailureType.TIMEOUT
-
-    # 5xx — Transient provider failures
     if status_code >= 500:
         return FailureType.TRANSIENT_PROVIDER_FAILURE
-
-    # Policy failures (check message keywords — takes precedence)
     if "quota" in error_lower:
         return FailureType.POLICY
     if "disabled" in error_lower:
         return FailureType.POLICY
     if "blocked" in error_lower:
         return FailureType.POLICY
-
-    # 401 — Authentication failure (invalid API key)
     if status_code == 401:
         return FailureType.AUTHENTICATION_FAILURE
-
-    # 403 — Could be auth or policy
     if status_code == 403:
         if "api key" in error_lower or "credential" in error_lower or "unauthorized" in error_lower:
             return FailureType.AUTHENTICATION_FAILURE
         return FailureType.POLICY
-
-    # 404 — Model not found or wrong endpoint (NOT authentication failure)
     if status_code == 404:
         if "model" in error_lower or "not found" in error_lower:
             return FailureType.MODEL_NOT_FOUND
         return FailureType.INVALID_REQUEST
-
-    # 400 — Bad request (malformed prompt, invalid parameters)
     if status_code == 400:
         return FailureType.INVALID_REQUEST
-
-    # 422 — Unprocessable entity
     if status_code == 422:
         return FailureType.INVALID_REQUEST
-
-    # Default to transient
     return FailureType.TRANSIENT_PROVIDER_FAILURE
 
 
 def is_retryable(failure_type: FailureType) -> bool:
     """Determine if a failure type warrants cascading to another provider."""
-    return failure_type in {
-        FailureType.RATE_LIMIT,
-        FailureType.TIMEOUT,
-        FailureType.TRANSIENT_PROVIDER_FAILURE,
-    }
+    return failure_type in {FailureType.RATE_LIMIT, FailureType.TIMEOUT, FailureType.TRANSIENT_PROVIDER_FAILURE}
 
 
 # ============================================================================
@@ -296,14 +236,10 @@ class GeminiNormalizer:
     """
     Convert Gemini API responses to OpenAI-compatible format.
 
-    Gemini returns:
-        { candidates: [...], usageMetadata: {...}, modelVersion: "...", responseId: "..." }
-
-    We normalize to:
-        { id, object, created, model, choices: [{ index, message, finish_reason }], usage }
+    Gemini returns: { candidates: [...], usageMetadata: {...}, modelVersion, responseId }
+    We normalize to: { id, object, created, model, choices, usage }
     """
 
-    # Gemini finish reason → OpenAI finish_reason mapping
     FINISH_REASON_MAP = {
         "STOP": "stop",
         "MAX_TOKENS": "length",
@@ -319,54 +255,28 @@ class GeminiNormalizer:
         max_tokens: Optional[int] = None,
         top_p: Optional[float] = None,
     ) -> dict:
-        """
-        Convert OpenAI-format messages to Gemini generateContent format.
-
-        Handles:
-        - System instructions via systemInstruction (Gemini's native mechanism)
-        - Multiple user/model turns
-        - Edge cases: empty content, missing roles
-        """
+        """Convert OpenAI-format messages to Gemini generateContent format."""
         system_instruction = None
         contents = []
 
         for msg in messages:
             role = msg.role.lower()
-
             if role == "system":
-                # Gemini supports native system instructions
                 if system_instruction is None:
                     system_instruction = msg.content
                 else:
-                    # Multiple system messages: concatenate
                     system_instruction += "\n" + msg.content
             elif role == "user":
-                contents.append({
-                    "role": "user",
-                    "parts": [{"text": msg.content}],
-                })
+                contents.append({"role": "user", "parts": [{"text": msg.content}]})
             elif role == "assistant":
-                # Map assistant → model for Gemini
-                contents.append({
-                    "role": "model",
-                    "parts": [{"text": msg.content}],
-                })
+                contents.append({"role": "model", "parts": [{"text": msg.content}]})
             else:
-                # Unknown role → treat as user
-                contents.append({
-                    "role": "user",
-                    "parts": [{"text": msg.content}],
-                })
+                contents.append({"role": "user", "parts": [{"text": msg.content}]})
 
         payload: dict[str, Any] = {"contents": contents}
-
-        # Add system instruction if present (Gemini native mechanism)
         if system_instruction:
-            payload["systemInstruction"] = {
-                "parts": [{"text": system_instruction}]
-            }
+            payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
 
-        # Generation config
         gen_config: dict[str, Any] = {}
         if temperature is not None:
             gen_config["temperature"] = temperature
@@ -374,7 +284,6 @@ class GeminiNormalizer:
             gen_config["maxOutputTokens"] = max_tokens
         if top_p is not None:
             gen_config["topP"] = top_p
-
         if gen_config:
             payload["generationConfig"] = gen_config
 
@@ -386,87 +295,45 @@ class GeminiNormalizer:
         provider_name: str = "gemini",
         model_used: str = "",
     ) -> ChatCompletionResponse:
-        """
-        Convert Gemini response to OpenAI-compatible ChatCompletionResponse.
-
-        Handles edge cases:
-        - Empty candidates
-        - Blocked/safety responses
-        - Missing usage metadata
-        - Missing responseId
-        - Multiple parts in a single candidate
-        - thoughtSignature (Gemini 3.5+ specific)
-        """
+        """Convert Gemini response to OpenAI-compatible ChatCompletionResponse."""
         now = int(time.time())
         response_id = gemini_response.get("responseId") or f"chatcmpl-{uuid.uuid4().hex[:24]}"
         model_version = gemini_response.get("modelVersion", model_used)
 
-        # Handle empty or missing candidates
         candidates = gemini_response.get("candidates", [])
         if not candidates:
-            # Return a response indicating the model produced no output
             return ChatCompletionResponse(
-                id=response_id,
-                created=now,
-                model=model_version,
-                choices=[{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "",
-                    },
-                    "finish_reason": "stop",
-                }],
+                id=response_id, created=now, model=model_version,
+                choices=[{"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
                 usage=GeminiNormalizer._normalize_usage(gemini_response.get("usageMetadata")),
                 provider=provider_name,
             )
 
         candidate = candidates[0]
-
-        # Handle blocked/safety responses
         finish_reason_raw = candidate.get("finishReason", "STOP")
         finish_reason = GeminiNormalizer.FINISH_REASON_MAP.get(finish_reason_raw, "stop")
 
-        # Extract content from candidate
         content = ""
         candidate_content = candidate.get("content", {})
         parts = candidate_content.get("parts", [])
-
         if parts:
-            # Concatenate all text parts (skip thoughtSignature parts)
-            text_parts = []
-            for part in parts:
-                if "text" in part:
-                    text_parts.append(part["text"])
+            text_parts = [part["text"] for part in parts if "text" in part]
             content = "\n".join(text_parts)
 
-        # If content is empty but finish reason indicates safety/block
         if not content and finish_reason_raw in ("SAFETY", "RECITATION"):
             content = "[Response blocked by safety filter]"
 
-        # Build OpenAI-compatible response
         return ChatCompletionResponse(
-            id=response_id,
-            created=now,
-            model=model_version,
-            choices=[{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": content,
-                },
-                "finish_reason": finish_reason,
-            }],
+            id=response_id, created=now, model=model_version,
+            choices=[{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": finish_reason}],
             usage=GeminiNormalizer._normalize_usage(gemini_response.get("usageMetadata")),
             provider=provider_name,
         )
 
     @staticmethod
     def _normalize_usage(usage_metadata: Optional[dict]) -> Optional[dict]:
-        """Convert Gemini usageMetadata to OpenAI usage format."""
         if not usage_metadata:
             return None
-
         return {
             "prompt_tokens": usage_metadata.get("promptTokenCount", 0),
             "completion_tokens": usage_metadata.get("candidatesTokenCount", 0),
@@ -481,15 +348,6 @@ class GeminiNormalizer:
 class AIGateway:
     """
     OpenAI-compatible AI gateway with provider routing and circuit breakers.
-
-    Architecture:
-        Application → AI Gateway → Capability Router → Provider Pool
-
-    Key principles:
-    - AI provides reasoning, not authority
-    - Deterministic policy controls what actions are permitted
-    - Provider failures cascade gracefully
-    - All requests produce audit events
     """
 
     def __init__(self):
@@ -512,24 +370,9 @@ class AIGateway:
         request: ChatCompletionRequest,
         session: AsyncSession,
     ) -> ChatCompletionResponse:
-        """
-        Process a chat completion request with provider routing and failover.
-
-        Flow:
-        1. Select providers based on capabilities and health
-        2. Try each provider in order
-        3. On failure: classify, record, cascade to next
-        4. On success: normalize response to OpenAI format
-        5. Return normalized response
-        """
-        settings = self._settings
+        """Process a chat completion request with provider routing and failover."""
         cascade_count = 0
-
-        # Determine provider order based on capabilities and health
-        provider_order = await self._select_providers(
-            request.required_capabilities, session
-        )
-
+        provider_order = await self._select_providers(request.required_capabilities, session)
         if not provider_order:
             raise ValueError("No healthy AI providers available")
 
@@ -538,152 +381,88 @@ class AIGateway:
             config = ProviderConfig.get_config(provider_name)
             if not config:
                 continue
-
-            # Get API key
-            api_key = getattr(settings, config["api_key_env"], "")
+            api_key = getattr(self._settings, config["api_key_env"], "")
             if not api_key:
                 continue
 
-            # Check circuit breaker
             cb = self._get_circuit_breaker(provider_name)
             if not cb.can_execute():
                 cascade_count += 1
-                logger.debug(
-                    "circuit_breaker_blocked",
-                    provider=provider_name,
-                    state=cb.state.value,
-                )
                 continue
 
-            # Try the provider
             try:
                 start_time = time.time()
-                raw_response = await self._call_provider(
-                    provider_name, config, api_key, request
-                )
+                raw_response = await self._call_provider(provider_name, config, api_key, request)
                 latency_ms = (time.time() - start_time) * 1000
-
                 cb.record_success()
 
-                # Normalize response to OpenAI-compatible format
-                normalized_response = GeminiNormalizer.normalize_response(
-                    raw_response,
-                    provider_name=provider_name,
-                    model_used=request.model,
-                )
-                normalized_response.latency_ms = latency_ms
-                normalized_response.cascade_count = cascade_count
+                normalized = GeminiNormalizer.normalize_response(raw_response, provider_name, request.model)
+                normalized.latency_ms = latency_ms
+                normalized.cascade_count = cascade_count
 
-                # Record success event
                 await self._record_provider_event(
-                    provider_name=provider_name,
-                    request_type="chat_completion",
-                    model_used=request.model,
-                    latency_ms=latency_ms,
-                    success=True,
-                    session=session,
+                    provider_name=provider_name, request_type="chat_completion",
+                    model_used=request.model, latency_ms=latency_ms, success=True, session=session,
                 )
-
-                return normalized_response
+                return normalized
 
             except httpx.HTTPStatusError as e:
                 failure_type = classify_failure(e.response.status_code, str(e))
                 cb.record_failure()
-
                 await self._record_provider_event(
-                    provider_name=provider_name,
-                    request_type="chat_completion",
-                    model_used=request.model,
-                    latency_ms=0,
-                    success=False,
-                    error_message=str(e),
-                    error_classification=failure_type.value,
-                    status_code=e.response.status_code,
-                    session=session,
+                    provider_name=provider_name, request_type="chat_completion",
+                    model_used=request.model, latency_ms=0, success=False,
+                    error_message=str(e), error_classification=failure_type.value, session=session,
                 )
-
-                # If non-retryable, stop cascading
                 if not is_retryable(failure_type):
-                    error_msg = self._format_provider_error(
-                        provider_name, failure_type, e.response.status_code, str(e)
-                    )
-                    raise ValueError(error_msg)
-
+                    raise ValueError(self._format_provider_error(provider_name, failure_type, e.response.status_code))
                 last_error = e
                 cascade_count += 1
-                continue
-
             except Exception as e:
                 cb.record_failure()
                 last_error = e
                 cascade_count += 1
-                continue
 
-        # All providers failed
-        raise ValueError(
-            f"All AI providers failed after {cascade_count} cascades. "
-            f"Last error: {last_error}"
-        )
+        raise ValueError(f"All AI providers failed after {cascade_count} cascades. Last error: {last_error}")
 
-    def _format_provider_error(
-        self,
-        provider_name: str,
-        failure_type: FailureType,
-        status_code: int,
-        error_message: str,
-    ) -> str:
-        """Format a meaningful error message based on failure classification."""
+    def _format_provider_error(self, provider_name: str, failure_type: FailureType, status_code: int) -> str:
         if failure_type == FailureType.AUTHENTICATION_FAILURE:
             return f"Provider '{provider_name}' authentication failed (HTTP {status_code}). Check API key."
         elif failure_type == FailureType.MODEL_NOT_FOUND:
             return f"Provider '{provider_name}' model not found (HTTP {status_code}). Model may be unavailable or renamed."
         elif failure_type == FailureType.INVALID_REQUEST:
-            return f"Provider '{provider_name}' rejected request (HTTP {status_code}): {error_message}"
+            return f"Provider '{provider_name}' rejected request (HTTP {status_code})."
         elif failure_type == FailureType.RATE_LIMIT:
-            return f"Provider '{provider_name}' rate limited (HTTP 429). Try another provider."
+            return f"Provider '{provider_name}' rate limited (HTTP 429)."
         elif failure_type == FailureType.POLICY:
-            return f"Provider '{provider_name}' policy violation: {error_message}"
+            return f"Provider '{provider_name}' policy violation."
         elif failure_type == FailureType.TIMEOUT:
             return f"Provider '{provider_name}' request timed out."
-        elif failure_type == FailureType.TRANSIENT_PROVIDER_FAILURE:
-            return f"Provider '{provider_name}' transient failure (HTTP {status_code})."
         else:
-            return f"Provider '{provider_name}' failed: {error_message}"
+            return f"Provider '{provider_name}' transient failure (HTTP {status_code})."
 
-    async def _select_providers(
-        self,
-        required_capabilities: list[str],
-        session: AsyncSession,
-    ) -> list[str]:
-        """
-        Select providers based on capabilities, health, and policy.
-        Not merely: Gemini → OpenAI → Groq.
-        The ordering is policy/configuration, not hardcoded doctrine.
-        """
-        # Get provider states from database
-        result = await session.execute(select(AIProvider))
-        providers = {p.name: p for p in result.scalars().all()}
+    async def _select_providers(self, required_capabilities: list[str], session: AsyncSession) -> list[str]:
+        """Select providers based on capabilities, health, and policy. DB-resilient."""
+        providers: dict = {}
+        try:
+            result = await session.execute(select(AIProvider))
+            providers = {p.name: p for p in result.scalars().all()}
+        except Exception as e:
+            logger.warning("provider_selection_db_unavailable", error=str(e))
 
         settings = self._settings
         candidates = []
-
         for name in ProviderConfig.get_all_providers():
-            # Check if API key is configured
             config = ProviderConfig.get_config(name)
             if not config:
                 continue
             api_key = getattr(settings, config["api_key_env"], "")
             if not api_key:
                 continue
-
-            # Check capabilities
             if required_capabilities:
                 provider_caps = set(config.get("capabilities", []))
-                required = set(required_capabilities)
-                if not required.issubset(provider_caps):
+                if not set(required_capabilities).issubset(provider_caps):
                     continue
-
-            # Check health from database state
             db_provider = providers.get(name)
             if db_provider:
                 if db_provider.status == ProviderStatus.DISABLED:
@@ -691,77 +470,37 @@ class AIGateway:
                 if db_provider.status == ProviderStatus.COOLDOWN:
                     if db_provider.cooldown_until and db_provider.cooldown_until > datetime.now(timezone.utc):
                         continue
-
-            # Check circuit breaker
             cb = self._get_circuit_breaker(name)
             if not cb.can_execute():
                 continue
-
-            # Score the provider (lower is better)
             score = 0
             if db_provider:
-                # Prefer healthy providers
                 if db_provider.status == ProviderStatus.HEALTHY:
                     score -= 10
-                # Prefer low latency
                 score += db_provider.avg_latency_ms / 1000
-                # Prefer high success rate
                 score += (1 - db_provider.success_rate) * 50
-
             candidates.append((name, score))
 
-        # Sort by score (best first)
         candidates.sort(key=lambda x: x[1])
         return [name for name, _ in candidates]
 
-    async def _call_provider(
-        self,
-        provider_name: str,
-        config: dict,
-        api_key: str,
-        request: ChatCompletionRequest,
-    ) -> dict:
-        """Make the actual API call to a provider."""
+    async def _call_provider(self, provider_name: str, config: dict, api_key: str, request: ChatCompletionRequest) -> dict:
         client = await self._get_client()
-
-        # Convert to provider-specific format
-        headers, payload, url = self._build_request(
-            provider_name, config, api_key, request
-        )
-
-        timeout = config.get("timeout", 30)
-        response = await client.post(
-            url,
-            json=payload,
-            headers=headers,
-            timeout=timeout,
-        )
+        headers, payload, url = self._build_request(provider_name, config, api_key, request)
+        response = await client.post(url, json=payload, headers=headers, timeout=config.get("timeout", 30))
         response.raise_for_status()
         return response.json()
 
-    def _build_request(
-        self,
-        provider_name: str,
-        config: dict,
-        api_key: str,
-        request: ChatCompletionRequest,
-    ) -> tuple[dict, dict, str]:
-        """Build provider-specific request format."""
+    def _build_request(self, provider_name: str, config: dict, api_key: str, request: ChatCompletionRequest) -> tuple[dict, dict, str]:
         base_url = config["base_url"]
-
         if provider_name == "gemini":
-            # Gemini uses different format with native system instruction support
             url = f"{base_url}/models/{request.model}:generateContent?key={api_key}"
-
             payload = GeminiNormalizer.normalize_request_for_gemini(
-                messages=request.messages,
-                temperature=request.temperature,
-                max_tokens=request.max_tokens,
-                top_p=request.top_p,
+                messages=request.messages, temperature=request.temperature,
+                max_tokens=request.max_tokens, top_p=request.top_p,
             )
             headers = {"Content-Type": "application/json"}
         else:
-            # OpenAI-compatible format (OpenAI, Groq)
             url = f"{base_url}/chat/completions"
             payload = {
                 "model": request.model,
@@ -771,73 +510,46 @@ class AIGateway:
             }
             if request.top_p is not None:
                 payload["top_p"] = request.top_p
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            }
-
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         return headers, payload, url
 
     async def _record_provider_event(
-        self,
-        provider_name: str,
-        request_type: str,
-        model_used: str,
-        latency_ms: float,
-        success: bool,
-        session: AsyncSession,
-        error_message: Optional[str] = None,
-        error_classification: Optional[str] = None,
-        status_code: Optional[int] = None,
+        self, provider_name: str, request_type: str, model_used: str,
+        latency_ms: float, success: bool, session: AsyncSession,
+        error_message: Optional[str] = None, error_classification: Optional[str] = None,
     ):
-        """Record a provider event for observability."""
-        # Get provider ID
-        result = await session.execute(
-            select(AIProvider).where(AIProvider.name == provider_name)
-        )
-        provider = result.scalar_one_or_none()
-        if not provider:
-            return
-
-        event = AIProviderEvent(
-            provider_id=provider.id,
-            request_type=request_type,
-            model_used=model_used,
-            latency_ms=latency_ms,
-            success=success,
-            error_message=error_message,
-            error_classification=error_classification,
-        )
-        session.add(event)
-
-        # Update provider stats
-        provider.total_requests += 1
-        if not success:
-            provider.total_failures += 1
-            # Track 429 separately from other retryable failures
-            if error_classification == "rate_limit":
-                provider.recent_429_count += 1
-            # Note: recent_429_count is ONLY for actual 429s, not all retryable errors
-
-        # Update success rate
-        if provider.total_requests > 0:
-            provider.success_rate = 1 - (provider.total_failures / provider.total_requests)
-            provider.failure_rate = provider.total_failures / provider.total_requests
-
-        # Update avg latency
-        if provider.total_requests == 1:
-            provider.avg_latency_ms = latency_ms
-        else:
-            provider.avg_latency_ms = (
-                (provider.avg_latency_ms * (provider.total_requests - 1) + latency_ms)
-                / provider.total_requests
+        """Record a provider event for observability. Gracefully degrades if DB unavailable."""
+        try:
+            result = await session.execute(select(AIProvider).where(AIProvider.name == provider_name))
+            provider = result.scalar_one_or_none()
+            if not provider:
+                return
+            event = AIProviderEvent(
+                provider_id=provider.id, request_type=request_type, model_used=model_used,
+                latency_ms=latency_ms, success=success, error_message=error_message,
+                error_classification=error_classification,
             )
-
-        provider.updated_at = datetime.now(timezone.utc)
-        await session.flush()
+            session.add(event)
+            provider.total_requests += 1
+            if not success:
+                provider.total_failures += 1
+                if error_classification == "rate_limit":
+                    provider.recent_429_count += 1
+            if provider.total_requests > 0:
+                provider.success_rate = 1 - (provider.total_failures / provider.total_requests)
+                provider.failure_rate = provider.total_failures / provider.total_requests
+            if provider.total_requests == 1:
+                provider.avg_latency_ms = latency_ms
+            else:
+                provider.avg_latency_ms = (
+                    (provider.avg_latency_ms * (provider.total_requests - 1) + latency_ms) / provider.total_requests
+                )
+            provider.updated_at = datetime.now(timezone.utc)
+            await session.flush()
+        except Exception as e:
+            logger.warning("provider_event_recording_failed", provider=provider_name, error=str(e))
 
     async def close(self):
-        """Close the HTTP client."""
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 

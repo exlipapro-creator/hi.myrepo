@@ -123,10 +123,10 @@ async def seed_ai_providers(session: AsyncSession) -> int:
             "api_key_env": "gemini_api_key",
             "capabilities": ["text", "vision", "reasoning", "code", "long_context"],
             "models": [
-                "gemini-2.5-flash",
-                "gemini-2.5-pro",
                 "gemini-3.5-flash",
                 "gemini-3.5-flash-lite",
+                "gemini-3.6-flash",
+                "gemini-3.7-flash",
             ],
         },
         {
