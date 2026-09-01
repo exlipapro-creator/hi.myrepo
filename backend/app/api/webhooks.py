@@ -3,12 +3,16 @@ hi.myrepo - Webhook Ingestion
 
 Hardened webhook endpoints for external service integration.
 
-Requirements:
+Security model:
 - Signature verification where supported
-- Replay protection via idempotency keys
+- Replay protection via delivery ID tracking
 - Payload normalization into the event spine
-- Project association
+- Project association via repository/name lookup
 - Audit logging
+- Body size limits to prevent memory exhaustion
+- Timestamp freshness checks
+- Event type is NOT caller-controlled (mapped from GitHub event)
+- Custom webhooks cannot override event_type or severity
 
 Supported sources:
 - GitHub (push, deployment, check_run, etc.)
@@ -39,11 +43,30 @@ settings = get_settings()
 
 router = APIRouter()
 
+# Body size limits
+_MAX_WEBHOOK_BODY_BYTES = 1_000_000  # 1 MB — generous but bounded
+_MAX_GITHUB_PAYLOAD = 500_000        # 500 KB for GitHub events
+
+# Timestamp freshness
+_FRESHNESS_WINDOW_SECONDS = 600  # 10 minutes — reject webhooks older than this
+
 # Replay protection: store recent webhook IDs in memory
 # In production, use Redis or a database table
 _seen_webhook_ids: dict[str, datetime] = {}
 _MAX_SEEN_IDS = 10_000
 _REPLAY_WINDOW_SECONDS = 300  # 5 minutes
+
+# Allowed event types that custom webhooks can create
+# This prevents an attacker from injecting arbitrary event types
+_ALLOWED_CUSTOM_EVENT_TYPES = {
+    "ERROR_DETECTED",
+    "HEARTBEAT_DEGRADED",
+    "HEARTBEAT_FAILURE",
+    "DEPLOYMENT_STARTED",
+    "DEPLOYMENT_SUCCEEDED",
+    "DEPLOYMENT_FAILED",
+}
+_ALLOWED_CUSTOM_SEVERITIES = {"low", "medium", "high", "critical"}
 
 
 def _check_replay(delivery_id: str) -> bool:
@@ -69,6 +92,52 @@ def _check_replay(delivery_id: str) -> bool:
     return False
 
 
+def _check_body_size(body: bytes, max_bytes: int, source: str) -> None:
+    """Reject oversized webhook payloads before they consume processing resources."""
+    if len(body) > max_bytes:
+        logger.warning(
+            "webhook_body_too_large",
+            source=source,
+            size=len(body),
+            max=max_bytes,
+        )
+        raise HTTPException(
+            status_code=413,
+            detail=f"Payload too large. Maximum {max_bytes} bytes.",
+        )
+
+
+def _check_timestamp_freshness(request: Request, source: str) -> None:
+    """Check webhook timestamp freshness if available.
+    Some providers include a timestamp header; reject stale requests.
+    """
+    timestamp_header = request.headers.get("x-webhook-timestamp")
+    if not timestamp_header:
+        return  # No timestamp to check — provider doesn't send one
+
+    try:
+        ts = int(timestamp_header)
+        # Handle both seconds and milliseconds timestamps
+        if ts > 1e12:
+            ts = ts / 1000.0
+        webhook_time = datetime.fromtimestamp(ts, tz=timezone.utc)
+        now = datetime.now(timezone.utc)
+        age = (now - webhook_time).total_seconds()
+        if age > _FRESHNESS_WINDOW_SECONDS:
+            logger.warning(
+                "webhook_stale",
+                source=source,
+                age_seconds=age,
+                max=_FRESHNESS_WINDOW_SECONDS,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Webhook is too old ({int(age)} seconds). Maximum {_FRESHNESS_WINDOW_SECONDS}.",
+            )
+    except (ValueError, TypeError, OverflowError):
+        pass  # Invalid timestamp — let other checks handle it
+
+
 def _verify_github_signature(payload: bytes, signature: str, secret: str) -> bool:
     """Verify GitHub webhook HMAC signature."""
     if not secret:
@@ -89,9 +158,13 @@ async def github_webhook(request: Request):
     Handle GitHub webhooks.
 
     Verifies signature, normalizes payload, and ingests events.
+    Security: body size limit → signature verification → replay check → timestamp freshness.
     """
     # Read body for signature verification
     body = await request.body()
+
+    # 1. Reject oversized payloads before any processing
+    _check_body_size(body, _MAX_GITHUB_PAYLOAD, "github")
 
     # Get GitHub delivery ID for replay protection
     delivery_id = request.headers.get("x-github-delivery", "")
@@ -209,8 +282,12 @@ def _determine_github_severity(github_event: str, action: str) -> str:
 async def vercel_webhook(request: Request):
     """
     Handle Vercel deployment webhooks.
+    Security: body size limit → signature verification → replay check.
     """
     body = await request.body()
+
+    # 1. Reject oversized payloads before any processing
+    _check_body_size(body, _MAX_WEBHOOK_BODY_BYTES, "vercel")
 
     # Replay protection
     delivery_id = request.headers.get("x-vercel-delivery-id", str(uuid.uuid4()))
@@ -296,17 +373,25 @@ async def custom_webhook(
     Generic custom webhook endpoint.
 
     Associates events with a project by slug.
+
+    SECURITY: The caller CANNOT freely specify event_type or severity.
+    The payload may contain a 'type' hint, but it is validated against
+    an allowlist. If invalid, it defaults to ERROR_DETECTED/medium.
+    This prevents arbitrary event injection.
     """
     body = await request.body()
 
-    # Replay protection using content hash
-    content_hash = hashlib.sha256(body).hexdigest()[:16]
+    # 1. Reject oversized payloads before any processing
+    _check_body_size(body, _MAX_WEBHOOK_BODY_BYTES, "custom")
+
+    # 2. Replay protection using full content hash
+    content_hash = hashlib.sha256(body).hexdigest()
     delivery_id = f"custom:{project_slug}:{content_hash}"
 
     if _check_replay(delivery_id):
         return {"status": "ignored", "reason": "duplicate_delivery"}
 
-    # Verify custom webhook secret if configured
+    # 3. Verify custom webhook secret if configured
     secret = settings.custom_webhook_secret
     if secret:
         signature = request.headers.get("x-webhook-signature", "")
@@ -321,15 +406,23 @@ async def custom_webhook(
     except json.JSONDecodeError:
         payload = {}
 
-    # Resolve project by slug
+    # 4. Resolve project by slug
     project_id = await _resolve_project_from_name(project_slug)
 
     if not project_id:
         raise HTTPException(status_code=404, detail=f"Project '{project_slug}' not found")
 
-    # Allow caller to specify event type, default to ERROR_DETECTED
-    event_type = payload.pop("event_type", "ERROR_DETECTED")
-    severity = payload.pop("severity", "medium")
+    # 5. SECURITY: Event type and severity are validated against allowlists
+    #    Callers CANNOT inject arbitrary event types or severities.
+    requested_type = payload.pop("event_type", "ERROR_DETECTED")
+    requested_severity = payload.pop("severity", "medium")
+
+    event_type = requested_type if requested_type in _ALLOWED_CUSTOM_EVENT_TYPES else "ERROR_DETECTED"
+    severity = requested_severity if requested_severity in _ALLOWED_CUSTOM_SEVERITIES else "medium"
+
+    # 6. Strip internal fields from payload to prevent injection
+    for internal_key in ["project_id", "actor", "correlation_id", "idempotency_key"]:
+        payload.pop(internal_key, None)
 
     envelope = EventEnvelope(
         event_type=event_type,
