@@ -550,6 +550,13 @@ class PipelineOrchestrator:
                     recommended_runbook = rb
                     break
 
+        # Read the project's actual autonomy level
+        project_result = await session.execute(
+            select(Project).where(Project.id == incident.project_id)
+        )
+        project = project_result.scalar_one_or_none()
+        project_autonomy = project.autonomy_level if project else 0
+
         context = PolicyContext(
             incident_id=incident.id,
             incident={
@@ -563,7 +570,7 @@ class PipelineOrchestrator:
                 "required_autonomy_level": recommended_runbook.required_autonomy_level if recommended_runbook else 3,
             } if recommended_runbook else None,
             verification_available=True,
-            autonomy_level=2,  # Default RECOMMEND level
+            autonomy_level=project_autonomy,
         )
 
         evaluation = await policy_engine.evaluate(context, "runbook", session)

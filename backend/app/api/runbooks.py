@@ -96,6 +96,8 @@ async def propose_runbook(
     user: TokenData = Depends(get_current_user),
 ):
     """Propose a runbook execution (creates pending execution)."""
+    # Verify user's org owns the target incident
+    await require_incident_access(proposal.incident_id, user)
     async with db_manager.get_session() as session:
         try:
             execution = await runbook_engine.propose_runbook(proposal, session)
@@ -115,7 +117,17 @@ async def approve_execution(
     user: TokenData = Depends(get_current_user),
 ):
     """Approve a pending runbook execution."""
+    # First verify the execution exists and user has access to its incident
     async with db_manager.get_session() as session:
+        exec_result = await session.execute(
+            select(RunbookExecution).where(RunbookExecution.id == execution_id)
+        )
+        execution = exec_result.scalar_one_or_none()
+        if not execution:
+            raise HTTPException(status_code=404, detail="Execution not found")
+        # Verify user's org owns the incident this execution targets
+        await require_incident_access(execution.incident_id, user)
+
         try:
             execution = await runbook_engine.approve_execution(
                 execution_id=execution_id,
