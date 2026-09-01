@@ -24,6 +24,7 @@ from app.database.models import MemoryRecord
 
 class MemoryCreate(BaseModel):
     """Data for creating a memory record."""
+    project_id: uuid.UUID
     incident_id: Optional[uuid.UUID] = None
     fingerprint: Optional[str] = None
     category: str  # incident, resolution, postmortem, pattern
@@ -59,6 +60,7 @@ class MemoryEngine:
         """Record the outcome of an incident or remediation."""
         record = MemoryRecord(
             id=uuid.uuid4(),
+            project_id=data.project_id,
             incident_id=data.incident_id,
             fingerprint=data.fingerprint,
             category=data.category,
@@ -81,15 +83,15 @@ class MemoryEngine:
         self,
         fingerprint: str,
         session: AsyncSession,
+        project_id: Optional[uuid.UUID] = None,
         limit: int = 10,
     ) -> list[MemoryRecord]:
-        """Search memory for records matching a fingerprint."""
-        result = await session.execute(
-            select(MemoryRecord)
-            .where(MemoryRecord.fingerprint == fingerprint)
-            .order_by(MemoryRecord.created_at.desc())
-            .limit(limit)
-        )
+        """Search memory for records matching a fingerprint, scoped to project."""
+        query = select(MemoryRecord).where(MemoryRecord.fingerprint == fingerprint)
+        if project_id is not None:
+            query = query.where(MemoryRecord.project_id == project_id)
+        query = query.order_by(MemoryRecord.created_at.desc()).limit(limit)
+        result = await session.execute(query)
         return list(result.scalars().all())
 
     async def search_by_category(
@@ -99,8 +101,10 @@ class MemoryEngine:
         project_id: Optional[uuid.UUID] = None,
         limit: int = 20,
     ) -> list[MemoryRecord]:
-        """Search memory by category."""
+        """Search memory by category, scoped to project."""
         query = select(MemoryRecord).where(MemoryRecord.category == category)
+        if project_id is not None:
+            query = query.where(MemoryRecord.project_id == project_id)
         query = query.order_by(MemoryRecord.created_at.desc()).limit(limit)
         result = await session.execute(query)
         return list(result.scalars().all())
@@ -109,10 +113,13 @@ class MemoryEngine:
         self,
         tags: list[str],
         session: AsyncSession,
+        project_id: Optional[uuid.UUID] = None,
         limit: int = 20,
     ) -> list[MemoryRecord]:
-        """Search memory by tags."""
+        """Search memory by tags, scoped to project."""
         query = select(MemoryRecord)
+        if project_id is not None:
+            query = query.where(MemoryRecord.project_id == project_id)
         # PostgreSQL JSONB array contains check
         for tag in tags:
             query = query.where(MemoryRecord.tags.op("@>")(f'["{tag}"]'))
@@ -124,13 +131,14 @@ class MemoryEngine:
         self,
         fingerprint: str,
         session: AsyncSession,
+        project_id: Optional[uuid.UUID] = None,
         limit: int = 5,
     ) -> list[dict]:
         """
-        Find similar historical incidents based on fingerprint.
+        Find similar historical incidents based on fingerprint, scoped to project.
         Returns evidence for the council.
         """
-        records = await self.search_by_fingerprint(fingerprint, session, limit)
+        records = await self.search_by_fingerprint(fingerprint, session, project_id=project_id, limit=limit)
         return [
             {
                 "id": str(r.id),
@@ -151,15 +159,18 @@ class MemoryEngine:
         self,
         fingerprint: str,
         session: AsyncSession,
+        project_id: Optional[uuid.UUID] = None,
     ) -> list[dict]:
-        """Get all resolutions for a given fingerprint."""
-        result = await session.execute(
+        """Get all resolutions for a given fingerprint, scoped to project."""
+        query = (
             select(MemoryRecord)
             .where(MemoryRecord.fingerprint == fingerprint)
             .where(MemoryRecord.category == "resolution")
-            .order_by(MemoryRecord.created_at.desc())
-            .limit(10)
         )
+        if project_id is not None:
+            query = query.where(MemoryRecord.project_id == project_id)
+        query = query.order_by(MemoryRecord.created_at.desc()).limit(10)
+        result = await session.execute(query)
         records = result.scalars().all()
         return [
             {

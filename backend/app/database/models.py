@@ -571,10 +571,12 @@ class MemoryRecord(Base):
     """
     Historical memory of incidents, resolutions, and operational learnings.
     The system builds institutional knowledge over time.
+    Every memory record belongs to a project for tenancy isolation.
     """
     __tablename__ = "memory_records"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=generate_uuid)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
     incident_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("incidents.id"), nullable=True)
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=True, index=True)
     category: Mapped[str] = mapped_column(String(50), nullable=False)  # incident, resolution, postmortem, pattern
@@ -590,9 +592,13 @@ class MemoryRecord(Base):
     tags: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+    # Relationships
+    project: Mapped["Project"] = relationship()
+
     __table_args__ = (
         Index("idx_memory_fingerprint", "fingerprint"),
         Index("idx_memory_category", "category"),
+        Index("idx_memory_project_id", "project_id"),
     )
 
 

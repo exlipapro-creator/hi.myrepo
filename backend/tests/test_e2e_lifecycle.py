@@ -381,6 +381,7 @@ class TestCompleteLifecycleSimulation:
 
         # Step 9: Memory record
         memory = MemoryCreate(
+            project_id=uuid.uuid4(),
             incident_id=proposal.incident_id,
             fingerprint=fp.fingerprint,
             category="resolution",

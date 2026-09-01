@@ -589,6 +589,7 @@ class PipelineOrchestrator:
     ):
         """Record the incident outcome in memory."""
         memory = MemoryCreate(
+            project_id=incident.project_id,
             incident_id=incident.id,
             fingerprint=incident.fingerprint,
             category="resolution" if incident.status == IncidentStatus.RESOLVED else "incident",

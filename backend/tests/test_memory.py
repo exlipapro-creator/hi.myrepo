@@ -18,6 +18,7 @@ def engine():
 class TestMemoryCreate:
     def test_create_record_data(self):
         data = MemoryCreate(
+            project_id=uuid.uuid4(),
             incident_id=uuid.uuid4(),
             fingerprint="abc123",
             category="resolution",
@@ -37,6 +38,7 @@ class TestMemoryCreate:
 
     def test_create_minimal_record(self):
         data = MemoryCreate(
+            project_id=uuid.uuid4(),
             category="pattern",
             title="Recurring timeout pattern",
             summary="Payment API times out during peak hours",
