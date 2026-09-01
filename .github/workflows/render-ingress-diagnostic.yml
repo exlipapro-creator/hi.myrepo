@@ -1,0 +1,239 @@
+# ============================================================================
+# Render External Ingress Diagnostic
+# ============================================================================
+# Purpose: Test hi.myrepo Render deployment from an independent GitHub-hosted
+#          cloud network to determine whether the onrender.com ingress failure
+#          is regional/network-path specific or reproducible from cloud infrastructure.
+#
+# Trigger: Manual (workflow_dispatch) only
+# Changes: NONE — diagnostic only, no deployments, no modifications
+# ============================================================================
+
+name: Render External Ingress Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for running diagnostic'
+        required: false
+        default: 'Manual ingress connectivity test'
+
+jobs:
+  diagnose:
+    name: External Connectivity Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Print diagnostic header
+        run: |
+          echo "========================================================"
+          echo "RENDER EXTERNAL INGRESS DIAGNOSTIC"
+          echo "========================================================"
+          echo "Triggered:  $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo "Reason:     ${{ github.event.inputs.reason }}"
+          echo "Runner:     ${{ runner.os }} ${{ runner.arch }}"
+          echo "Runner IP:  (see curl test below)"
+          echo "GitHub Actions region: unknown to us, but hosted by GitHub"
+          echo "========================================================"
+          echo ""
+
+      - name: Control — verify runner internet works
+        run: |
+          echo "========================================================"
+          echo "CONTROL TESTS — verify runner has internet access"
+          echo "========================================================"
+          echo ""
+          echo "--- Google ---"
+          curl -I --connect-timeout 10 --max-time 15 https://www.google.com 2>&1
+          echo ""
+          echo "--- httpbin.org ---"
+          curl -I --connect-timeout 10 --max-time 15 https://httpbin.org/get 2>&1
+          echo ""
+          echo "--- Runner public IP ---"
+          curl -s --connect-timeout 10 --max-time 10 https://api.ipify.org 2>&1 || echo "(ipify unavailable)"
+          echo ""
+          echo "--- Runner region hint ---"
+          curl -s --connect-timeout 10 --max-time 10 https://ipinfo.io 2>&1 || echo "(ipinfo unavailable)"
+          echo ""
+          echo "Control tests completed: $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo "========================================================"
+
+      - name: DNS resolution
+        run: |
+          echo "========================================================"
+          echo "DNS RESOLUTION"
+          echo "========================================================"
+          echo ""
+          echo "--- nslookup ---"
+          nslookup hi-myrepo-backend.onrender.com 2>&1 || echo "nslookup failed"
+          echo ""
+          echo "--- getent (system resolver) ---"
+          getent hosts hi-myrepo-backend.onrender.com 2>&1 || echo "getent failed"
+          echo ""
+          echo "--- dig (if available) ---"
+          dig hi-myrepo-backend.onrender.com ANY +short 2>&1 || echo "dig not available"
+          echo ""
+          echo "DNS completed: $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo "========================================================"
+
+      - name: TLS handshake test (openssl)
+        run: |
+          echo "========================================================"
+          echo "TLS HANDSHAKE TEST (openssl s_client)"
+          echo "========================================================"
+          echo ""
+          echo "Timestamp: $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo ""
+          echo "--- openssl s_client with SNI ---"
+          echo | timeout 15 openssl s_client \
+            -connect hi-myrepo-backend.onrender.com:443 \
+            -servername hi-myrepo-backend.onrender.com \
+            -brief 2>&1 || echo "openssl exit code: $?"
+          echo ""
+          echo "--- openssl s_client full (first 30 lines) ---"
+          echo | timeout 15 openssl s_client \
+            -connect hi-myrepo-backend.onrender.com:443 \
+            -servername hi-myrepo-backend.onrender.com 2>&1 | head -30 || echo "openssl exit code: $?"
+          echo ""
+          echo "TLS test completed: $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo "========================================================"
+
+      - name: HTTPS GET /health (default)
+        run: |
+          echo "========================================================"
+          echo "TEST 1: HTTPS GET /health"
+          echo "========================================================"
+          echo "Timestamp: $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo ""
+          curl -v \
+            --connect-timeout 15 \
+            --max-time 30 \
+            https://hi-myrepo-backend.onrender.com/health 2>&1
+          echo ""
+          echo "Completed: $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo "========================================================"
+
+      - name: HTTPS GET / (root)
+        run: |
+          echo "========================================================"
+          echo "TEST 2: HTTPS GET /"
+          echo "========================================================"
+          echo "Timestamp: $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo ""
+          curl -v \
+            --connect-timeout 15 \
+            --max-time 30 \
+            https://hi-myrepo-backend.onrender.com/ 2>&1
+          echo ""
+          echo "Completed: $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo "========================================================"
+
+      - name: HTTPS GET /health (HTTP/1.1 forced)
+        run: |
+          echo "========================================================"
+          echo "TEST 3: HTTPS GET /health (HTTP/1.1)"
+          echo "========================================================"
+          echo "Timestamp: $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo ""
+          curl -v \
+            --http1.1 \
+            --connect-timeout 15 \
+            --max-time 30 \
+            https://hi-myrepo-backend.onrender.com/health 2>&1
+          echo ""
+          echo "Completed: $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo "========================================================"
+
+      - name: HTTP GET /health (port 80, no TLS)
+        run: |
+          echo "========================================================"
+          echo "TEST 4: HTTP GET /health (port 80)"
+          echo "========================================================"
+          echo "Timestamp: $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo ""
+          curl -v \
+            --connect-timeout 15 \
+            --max-time 30 \
+            http://hi-myrepo-backend.onrender.com/health 2>&1
+          echo ""
+          echo "Completed: $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo "========================================================"
+
+      - name: Simultaneous summary
+        run: |
+          echo "========================================================"
+          echo "SIMULTANEOUS SUMMARY — all tests in one shot"
+          echo "========================================================"
+          echo "Timestamp: $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo ""
+
+          echo "--- 1. HTTPS /health ---"
+          curl -s -o /dev/null -w \
+            "HTTP=%{http_code} TCP=%{time_connect}s TLS=%{time_appconnect}s Total=%{time_total}s Size=%{size_download}" \
+            --connect-timeout 15 --max-time 30 \
+            https://hi-myrepo-backend.onrender.com/health 2>&1 || echo "FAILED"
+          echo ""
+
+          echo "--- 2. HTTPS / ---"
+          curl -s -o /dev/null -w \
+            "HTTP=%{http_code} TCP=%{time_connect}s TLS=%{time_appconnect}s Total=%{time_total}s Size=%{size_download}" \
+            --connect-timeout 15 --max-time 30 \
+            https://hi-myrepo-backend.onrender.com/ 2>&1 || echo "FAILED"
+          echo ""
+
+          echo "--- 3. HTTPS /health (HTTP/1.1) ---"
+          curl -s -o /dev/null -w \
+            "HTTP=%{http_code} TCP=%{time_connect}s TLS=%{time_appconnect}s Total=%{time_total}s Size=%{size_download}" \
+            --http1.1 --connect-timeout 15 --max-time 30 \
+            https://hi-myrepo-backend.onrender.com/health 2>&1 || echo "FAILED"
+          echo ""
+
+          echo "--- 4. HTTP /health (port 80) ---"
+          curl -s -o /dev/null -w \
+            "HTTP=%{http_code} TCP=%{time_connect}s TLS=%{time_appconnect}s Total=%{time_total}s Size=%{size_download}" \
+            --connect-timeout 15 --max-time 30 \
+            http://hi-myrepo-backend.onrender.com/health 2>&1 || echo "FAILED"
+          echo ""
+
+          echo "--- 5. Control: Google ---"
+          curl -s -o /dev/null -w \
+            "HTTP=%{http_code} TCP=%{time_connect}s TLS=%{time_appconnect}s Total=%{time_total}s" \
+            --connect-timeout 10 --max-time 15 \
+            https://www.google.com 2>&1 || echo "FAILED"
+          echo ""
+
+          echo "--- 6. Control: httpbin ---"
+          curl -s -o /dev/null -w \
+            "HTTP=%{http_code} TCP=%{time_connect}s TLS=%{time_appconnect}s Total=%{time_total}s" \
+            --connect-timeout 10 --max-time 15 \
+            https://httpbin.org/get 2>&1 || echo "FAILED"
+          echo ""
+
+          echo "--- 7. Control: Non-existent Render service ---"
+          curl -s -o /dev/null -w \
+            "HTTP=%{http_code} TCP=%{time_connect}s TLS=%{time_appconnect}s Total=%{time_total}s" \
+            --connect-timeout 15 --max-time 30 \
+            https://this-service-definitely-does-not-exist-xyz.onrender.com/health 2>&1 || echo "FAILED"
+          echo ""
+
+          echo ""
+          echo "All tests completed: $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo "========================================================"
+
+      - name: Final timestamp
+        run: |
+          echo ""
+          echo "========================================================"
+          echo "DIAGNOSTIC COMPLETE"
+          echo "Timestamp: $(date -u '+%Y-%m-%dT%H:%M:%S UTC')"
+          echo "========================================================"
+          echo ""
+          echo "NEXT STEPS:"
+          echo "1. Compare these results with the local machine results"
+          echo "2. If the same failure occurs → Render ingress platform issue"
+          echo "3. If it works from GitHub Actions → regional/network-path issue"
+          echo "4. Check Render application logs for any request entries"
+          echo "   during the test window (~$(date -u -d '-5 minutes' '+%H:%M') to $(date -u '+%H:%M') UTC)"
+          echo ""
