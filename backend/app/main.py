@@ -142,6 +142,47 @@ def create_app() -> FastAPI:
             allow_headers=["Authorization", "Content-Type"],
         )
 
+    # Rate limiting middleware for API routes
+    @app.middleware("http")
+    async def rate_limit_middleware(request: Request, call_next):
+        # Apply rate limiting to API routes (not health/root/webhooks)
+        path = request.url.path
+        # Exempt health, root, webhooks from rate limiting
+        if path.startswith("/api/v1/") or (path.startswith("/v1/") and not path.startswith("/v1/chat")):
+            key = f"{get_remote_address(request)}:{path.split('/')[3] if len(path.split('/')) > 3 else 'default'}"
+            # Simple in-memory rate limiter (single-instance)
+            import time
+            now = time.time()
+            window = 60  # 1-minute window
+            max_requests = settings.rate_limit_per_minute
+            
+            # Initialize or clean up the rate limit store
+            if not hasattr(app.state, "_rate_limits"):
+                app.state._rate_limits = {}
+            
+            store = app.state._rate_limits
+            # Clean old entries
+            expired = [k for k, v in store.items() if now - v[0] > window]
+            for k in expired:
+                del store[k]
+            
+            if key in store:
+                timestamps = store[key]
+                # Remove entries outside the window
+                timestamps = [t for t in timestamps if now - t < window]
+                if len(timestamps) >= max_requests:
+                    return JSONResponse(
+                        status_code=429,
+                        content={"error": "rate_limit_exceeded", "message": "Too many requests"},
+                        headers={"Retry-After": str(window)},
+                    )
+                timestamps.append(now)
+                store[key] = timestamps
+            else:
+                store[key] = [now]
+        
+        return await call_next(request)
+
     # Request ID middleware
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):
@@ -149,6 +190,18 @@ def create_app() -> FastAPI:
         request.state.request_id = request_id
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
+        return response
+
+    # Security headers middleware
+    @app.middleware("http")
+    async def security_headers_middleware(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        if settings.is_production:
+            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
         return response
 
     # Structured logging middleware
