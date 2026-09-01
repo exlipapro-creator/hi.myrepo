@@ -236,29 +236,29 @@ class TestCircuitBreaker:
 class TestFailureClassification:
     """Verify AI provider failure classification is correct."""
 
-    def test_429_is_retryable(self):
-        """Rate limit (429) should be retryable."""
-        assert classify_failure(429, "Rate limit exceeded") == FailureType.RETRYABLE
+    def test_429_is_rate_limit(self):
+        """Rate limit (429) should be classified as rate_limit."""
+        assert classify_failure(429, "Rate limit exceeded") == FailureType.RATE_LIMIT
 
-    def test_500_is_retryable(self):
-        """Server error (500) should be retryable."""
-        assert classify_failure(500, "Internal server error") == FailureType.RETRYABLE
+    def test_500_is_transient(self):
+        """Server error (500) should be classified as transient."""
+        assert classify_failure(500, "Internal server error") == FailureType.TRANSIENT_PROVIDER_FAILURE
 
-    def test_503_is_retryable(self):
-        """Service unavailable (503) should be retryable."""
-        assert classify_failure(503, "Service unavailable") == FailureType.RETRYABLE
+    def test_503_is_transient(self):
+        """Service unavailable (503) should be classified as transient."""
+        assert classify_failure(503, "Service unavailable") == FailureType.TRANSIENT_PROVIDER_FAILURE
 
-    def test_401_is_non_retryable(self):
-        """Auth failure (401) should NOT be retried."""
-        assert classify_failure(401, "Unauthorized") == FailureType.NON_RETRYABLE
+    def test_401_is_auth_failure(self):
+        """Auth failure (401) should be classified as authentication_failure."""
+        assert classify_failure(401, "Unauthorized") == FailureType.AUTHENTICATION_FAILURE
 
-    def test_400_is_non_retryable(self):
-        """Bad request (400) should NOT be retried."""
-        assert classify_failure(400, "Invalid request") == FailureType.NON_RETRYABLE
+    def test_400_is_invalid_request(self):
+        """Bad request (400) should be classified as invalid_request."""
+        assert classify_failure(400, "Invalid request") == FailureType.INVALID_REQUEST
 
-    def test_quota_exceeded_is_policy(self):
-        """Quota exceeded is a policy issue, not a transient error."""
-        assert classify_failure(429, "Quota exceeded") == FailureType.POLICY
+    def test_quota_429_is_rate_limit(self):
+        """Quota exceeded 429 is classified as rate_limit (429 takes precedence)."""
+        assert classify_failure(429, "Quota exceeded") == FailureType.RATE_LIMIT
 
     def test_disabled_provider_is_policy(self):
         """Disabled provider is a policy issue."""

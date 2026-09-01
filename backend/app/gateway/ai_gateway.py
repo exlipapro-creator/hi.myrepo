@@ -5,21 +5,30 @@ OpenAI-compatible interface with capability routing, provider state tracking,
 circuit breakers, and cost/quotawareness.
 
 Application → hi.myrepo AI Gateway → Capability Router → Provider Pool
+
+Architecture:
+    Client → /v1/chat/completions → Authentication → AI Gateway →
+    Capability Router → Provider → Provider Adapter / Normalizer →
+    OpenAI-compatible response
 """
 
 import asyncio
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Optional
 
 import httpx
+import structlog
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.database.models import AIProvider, AIProviderEvent, ProviderStatus
+
+logger = structlog.get_logger()
 
 
 # ============================================================================
@@ -33,7 +42,7 @@ class ChatMessage(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
-    model: str = "gemini-2.0-flash"
+    model: str = "gemini-3.5-flash"
     messages: list[ChatMessage]
     temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = 1024
@@ -68,7 +77,7 @@ class CircuitState(str, Enum):
 
 
 class CircuitBreaker:
-    """Per-provider circuit breaker."""
+    """Per-provider circuit breaker with asyncio-safe state transitions."""
 
     def __init__(
         self,
@@ -84,42 +93,62 @@ class CircuitBreaker:
         self._success_count = 0
         self._last_failure_time: Optional[float] = None
         self._half_open_calls = 0
+        self._lock = asyncio.Lock()
 
     @property
     def state(self) -> CircuitState:
+        """Check if OPEN circuit should transition to HALF_OPEN."""
         if self._state == CircuitState.OPEN:
             if self._last_failure_time:
                 elapsed = time.time() - self._last_failure_time
                 if elapsed >= self.recovery_timeout:
                     self._state = CircuitState.HALF_OPEN
                     self._half_open_calls = 0
+                    self._success_count = 0
         return self._state
 
     def record_success(self):
+        """Record a successful call."""
         if self._state == CircuitState.HALF_OPEN:
             self._success_count += 1
             if self._success_count >= self.half_open_max_calls:
                 self._state = CircuitState.CLOSED
                 self._failure_count = 0
                 self._success_count = 0
+                self._half_open_calls = 0
+                logger.info("circuit_breaker_closed", state="closed")
         elif self._state == CircuitState.CLOSED:
+            # Decay failure count on success
             self._failure_count = max(0, self._failure_count - 1)
 
     def record_failure(self):
+        """Record a failed call."""
         self._failure_count += 1
         self._last_failure_time = time.time()
         if self._state == CircuitState.HALF_OPEN:
+            # Any failure in HALF_OPEN re-opens the circuit
             self._state = CircuitState.OPEN
             self._success_count = 0
+            self._half_open_calls = 0
+            logger.warning("circuit_breaker_reopened", state="open")
         elif self._failure_count >= self.failure_threshold:
             self._state = CircuitState.OPEN
+            logger.warning(
+                "circuit_breaker_opened",
+                failure_count=self._failure_count,
+                threshold=self.failure_threshold,
+            )
 
     def can_execute(self) -> bool:
+        """Check if a call is allowed."""
         state = self.state
         if state == CircuitState.CLOSED:
             return True
         if state == CircuitState.HALF_OPEN:
-            return self._half_open_calls < self.half_open_max_calls
+            if self._half_open_calls < self.half_open_max_calls:
+                self._half_open_calls += 1
+                return True
+            return False
         return False
 
 
@@ -134,7 +163,13 @@ class ProviderConfig:
         "gemini": {
             "base_url": "https://generativelanguage.googleapis.com/v1beta",
             "api_key_env": "gemini_api_key",
-            "models": ["gemini-2.0-flash", "gemini-2.0-pro", "gemini-1.5-flash"],
+            "models": [
+                "gemini-2.5-flash",
+                "gemini-2.5-pro",
+                "gemini-3.5-flash",
+                "gemini-3.5-flash-lite",
+            ],
+            "default_model": "gemini-2.5-flash",
             "capabilities": ["text", "vision", "reasoning", "code", "long_context"],
             "timeout": 30,
         },
@@ -142,6 +177,7 @@ class ProviderConfig:
             "base_url": "https://api.openai.com/v1",
             "api_key_env": "openai_api_key",
             "models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
+            "default_model": "gpt-4o-mini",
             "capabilities": ["text", "vision", "reasoning", "code", "structured_output"],
             "timeout": 30,
         },
@@ -149,6 +185,7 @@ class ProviderConfig:
             "base_url": "https://api.groq.com/openai/v1",
             "api_key_env": "groq_api_key",
             "models": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
+            "default_model": "llama-3.3-70b-versatile",
             "capabilities": ["text", "speed", "code"],
             "timeout": 15,
         },
@@ -162,41 +199,279 @@ class ProviderConfig:
     def get_all_providers(cls) -> dict:
         return cls.PROVIDERS
 
+    @classmethod
+    def get_default_model(cls, provider_name: str) -> str:
+        config = cls.get_config(provider_name)
+        return config.get("default_model", "") if config else ""
+
 
 # ============================================================================
 # Failure Classification
 # ============================================================================
 
 class FailureType(str, Enum):
-    RETRYABLE = "retryable"
-    NON_RETRYABLE = "non_retryable"
+    """Fine-grained failure classification for AI provider errors."""
+    AUTHENTICATION_FAILURE = "authentication_failure"
+    MODEL_NOT_FOUND = "model_not_found"
+    INVALID_REQUEST = "invalid_request"
+    RATE_LIMIT = "rate_limit"
     POLICY = "policy"
+    TRANSIENT_PROVIDER_FAILURE = "transient_provider_failure"
+    TIMEOUT = "timeout"
+    MALFORMED_RESPONSE = "malformed_response"
+    UNKNOWN = "unknown"
 
 
 def classify_failure(status_code: int, error_message: str) -> FailureType:
-    """Classify an AI provider failure."""
+    """
+    Classify an AI provider failure with fine-grained categories.
+
+    IMPORTANT: Do NOT classify every 400/403/404 as authentication failure.
+    A 404 can mean invalid model, wrong endpoint, or unavailable model.
+    """
     error_lower = error_message.lower()
 
-    # Policy failures (check message keywords first — takes precedence)
-    # e.g., 403 "Provider disabled" is a policy issue, not an auth error
+    # 429 — Rate limit (always retryable after cooldown)
+    if status_code == 429:
+        return FailureType.RATE_LIMIT
+
+    # 408 — Request timeout
+    if status_code == 408:
+        return FailureType.TIMEOUT
+
+    # 5xx — Transient provider failures
+    if status_code >= 500:
+        return FailureType.TRANSIENT_PROVIDER_FAILURE
+
+    # Policy failures (check message keywords — takes precedence)
     if "quota" in error_lower:
         return FailureType.POLICY
     if "disabled" in error_lower:
         return FailureType.POLICY
-    if "limit" in error_lower and status_code != 429:
+    if "blocked" in error_lower:
         return FailureType.POLICY
 
-    # Non-retryable: authentication/request errors
-    non_retryable_codes = {400, 401, 403, 404, 422}
-    if status_code in non_retryable_codes:
-        return FailureType.NON_RETRYABLE
+    # 401 — Authentication failure (invalid API key)
+    if status_code == 401:
+        return FailureType.AUTHENTICATION_FAILURE
 
-    # Retryable: transient errors
-    retryable_codes = {408, 429, 500, 502, 503, 504}
-    if status_code in retryable_codes:
-        return FailureType.RETRYABLE
+    # 403 — Could be auth or policy
+    if status_code == 403:
+        if "api key" in error_lower or "credential" in error_lower or "unauthorized" in error_lower:
+            return FailureType.AUTHENTICATION_FAILURE
+        return FailureType.POLICY
 
-    return FailureType.RETRYABLE
+    # 404 — Model not found or wrong endpoint (NOT authentication failure)
+    if status_code == 404:
+        if "model" in error_lower or "not found" in error_lower:
+            return FailureType.MODEL_NOT_FOUND
+        return FailureType.INVALID_REQUEST
+
+    # 400 — Bad request (malformed prompt, invalid parameters)
+    if status_code == 400:
+        return FailureType.INVALID_REQUEST
+
+    # 422 — Unprocessable entity
+    if status_code == 422:
+        return FailureType.INVALID_REQUEST
+
+    # Default to transient
+    return FailureType.TRANSIENT_PROVIDER_FAILURE
+
+
+def is_retryable(failure_type: FailureType) -> bool:
+    """Determine if a failure type warrants cascading to another provider."""
+    return failure_type in {
+        FailureType.RATE_LIMIT,
+        FailureType.TIMEOUT,
+        FailureType.TRANSIENT_PROVIDER_FAILURE,
+    }
+
+
+# ============================================================================
+# Gemini Response Normalizer
+# ============================================================================
+
+class GeminiNormalizer:
+    """
+    Convert Gemini API responses to OpenAI-compatible format.
+
+    Gemini returns:
+        { candidates: [...], usageMetadata: {...}, modelVersion: "...", responseId: "..." }
+
+    We normalize to:
+        { id, object, created, model, choices: [{ index, message, finish_reason }], usage }
+    """
+
+    # Gemini finish reason → OpenAI finish_reason mapping
+    FINISH_REASON_MAP = {
+        "STOP": "stop",
+        "MAX_TOKENS": "length",
+        "SAFETY": "content_filter",
+        "RECITATION": "content_filter",
+        "FINISH_REASON_UNSPECIFIED": "stop",
+    }
+
+    @staticmethod
+    def normalize_request_for_gemini(
+        messages: list[ChatMessage],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
+    ) -> dict:
+        """
+        Convert OpenAI-format messages to Gemini generateContent format.
+
+        Handles:
+        - System instructions via systemInstruction (Gemini's native mechanism)
+        - Multiple user/model turns
+        - Edge cases: empty content, missing roles
+        """
+        system_instruction = None
+        contents = []
+
+        for msg in messages:
+            role = msg.role.lower()
+
+            if role == "system":
+                # Gemini supports native system instructions
+                if system_instruction is None:
+                    system_instruction = msg.content
+                else:
+                    # Multiple system messages: concatenate
+                    system_instruction += "\n" + msg.content
+            elif role == "user":
+                contents.append({
+                    "role": "user",
+                    "parts": [{"text": msg.content}],
+                })
+            elif role == "assistant":
+                # Map assistant → model for Gemini
+                contents.append({
+                    "role": "model",
+                    "parts": [{"text": msg.content}],
+                })
+            else:
+                # Unknown role → treat as user
+                contents.append({
+                    "role": "user",
+                    "parts": [{"text": msg.content}],
+                })
+
+        payload: dict[str, Any] = {"contents": contents}
+
+        # Add system instruction if present (Gemini native mechanism)
+        if system_instruction:
+            payload["systemInstruction"] = {
+                "parts": [{"text": system_instruction}]
+            }
+
+        # Generation config
+        gen_config: dict[str, Any] = {}
+        if temperature is not None:
+            gen_config["temperature"] = temperature
+        if max_tokens is not None:
+            gen_config["maxOutputTokens"] = max_tokens
+        if top_p is not None:
+            gen_config["topP"] = top_p
+
+        if gen_config:
+            payload["generationConfig"] = gen_config
+
+        return payload
+
+    @staticmethod
+    def normalize_response(
+        gemini_response: dict,
+        provider_name: str = "gemini",
+        model_used: str = "",
+    ) -> ChatCompletionResponse:
+        """
+        Convert Gemini response to OpenAI-compatible ChatCompletionResponse.
+
+        Handles edge cases:
+        - Empty candidates
+        - Blocked/safety responses
+        - Missing usage metadata
+        - Missing responseId
+        - Multiple parts in a single candidate
+        - thoughtSignature (Gemini 3.5+ specific)
+        """
+        now = int(time.time())
+        response_id = gemini_response.get("responseId") or f"chatcmpl-{uuid.uuid4().hex[:24]}"
+        model_version = gemini_response.get("modelVersion", model_used)
+
+        # Handle empty or missing candidates
+        candidates = gemini_response.get("candidates", [])
+        if not candidates:
+            # Return a response indicating the model produced no output
+            return ChatCompletionResponse(
+                id=response_id,
+                created=now,
+                model=model_version,
+                choices=[{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                    },
+                    "finish_reason": "stop",
+                }],
+                usage=GeminiNormalizer._normalize_usage(gemini_response.get("usageMetadata")),
+                provider=provider_name,
+            )
+
+        candidate = candidates[0]
+
+        # Handle blocked/safety responses
+        finish_reason_raw = candidate.get("finishReason", "STOP")
+        finish_reason = GeminiNormalizer.FINISH_REASON_MAP.get(finish_reason_raw, "stop")
+
+        # Extract content from candidate
+        content = ""
+        candidate_content = candidate.get("content", {})
+        parts = candidate_content.get("parts", [])
+
+        if parts:
+            # Concatenate all text parts (skip thoughtSignature parts)
+            text_parts = []
+            for part in parts:
+                if "text" in part:
+                    text_parts.append(part["text"])
+            content = "\n".join(text_parts)
+
+        # If content is empty but finish reason indicates safety/block
+        if not content and finish_reason_raw in ("SAFETY", "RECITATION"):
+            content = "[Response blocked by safety filter]"
+
+        # Build OpenAI-compatible response
+        return ChatCompletionResponse(
+            id=response_id,
+            created=now,
+            model=model_version,
+            choices=[{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": content,
+                },
+                "finish_reason": finish_reason,
+            }],
+            usage=GeminiNormalizer._normalize_usage(gemini_response.get("usageMetadata")),
+            provider=provider_name,
+        )
+
+    @staticmethod
+    def _normalize_usage(usage_metadata: Optional[dict]) -> Optional[dict]:
+        """Convert Gemini usageMetadata to OpenAI usage format."""
+        if not usage_metadata:
+            return None
+
+        return {
+            "prompt_tokens": usage_metadata.get("promptTokenCount", 0),
+            "completion_tokens": usage_metadata.get("candidatesTokenCount", 0),
+            "total_tokens": usage_metadata.get("totalTokenCount", 0),
+        }
 
 
 # ============================================================================
@@ -209,6 +484,12 @@ class AIGateway:
 
     Architecture:
         Application → AI Gateway → Capability Router → Provider Pool
+
+    Key principles:
+    - AI provides reasoning, not authority
+    - Deterministic policy controls what actions are permitted
+    - Provider failures cascade gracefully
+    - All requests produce audit events
     """
 
     def __init__(self):
@@ -233,6 +514,13 @@ class AIGateway:
     ) -> ChatCompletionResponse:
         """
         Process a chat completion request with provider routing and failover.
+
+        Flow:
+        1. Select providers based on capabilities and health
+        2. Try each provider in order
+        3. On failure: classify, record, cascade to next
+        4. On success: normalize response to OpenAI format
+        5. Return normalized response
         """
         settings = self._settings
         cascade_count = 0
@@ -260,17 +548,31 @@ class AIGateway:
             cb = self._get_circuit_breaker(provider_name)
             if not cb.can_execute():
                 cascade_count += 1
+                logger.debug(
+                    "circuit_breaker_blocked",
+                    provider=provider_name,
+                    state=cb.state.value,
+                )
                 continue
 
             # Try the provider
             try:
                 start_time = time.time()
-                response = await self._call_provider(
+                raw_response = await self._call_provider(
                     provider_name, config, api_key, request
                 )
                 latency_ms = (time.time() - start_time) * 1000
 
                 cb.record_success()
+
+                # Normalize response to OpenAI-compatible format
+                normalized_response = GeminiNormalizer.normalize_response(
+                    raw_response,
+                    provider_name=provider_name,
+                    model_used=request.model,
+                )
+                normalized_response.latency_ms = latency_ms
+                normalized_response.cascade_count = cascade_count
 
                 # Record success event
                 await self._record_provider_event(
@@ -282,15 +584,7 @@ class AIGateway:
                     session=session,
                 )
 
-                return ChatCompletionResponse(
-                    id=response.get("id", ""),
-                    model=response.get("model", request.model),
-                    choices=response.get("choices", []),
-                    usage=response.get("usage"),
-                    provider=provider_name,
-                    latency_ms=latency_ms,
-                    cascade_count=cascade_count,
-                )
+                return normalized_response
 
             except httpx.HTTPStatusError as e:
                 failure_type = classify_failure(e.response.status_code, str(e))
@@ -304,14 +598,16 @@ class AIGateway:
                     success=False,
                     error_message=str(e),
                     error_classification=failure_type.value,
+                    status_code=e.response.status_code,
                     session=session,
                 )
 
-                if failure_type == FailureType.NON_RETRYABLE:
-                    # Don't try other providers for auth errors
-                    raise ValueError(
-                        f"Provider '{provider_name}' authentication failed: {e}"
+                # If non-retryable, stop cascading
+                if not is_retryable(failure_type):
+                    error_msg = self._format_provider_error(
+                        provider_name, failure_type, e.response.status_code, str(e)
                     )
+                    raise ValueError(error_msg)
 
                 last_error = e
                 cascade_count += 1
@@ -328,6 +624,31 @@ class AIGateway:
             f"All AI providers failed after {cascade_count} cascades. "
             f"Last error: {last_error}"
         )
+
+    def _format_provider_error(
+        self,
+        provider_name: str,
+        failure_type: FailureType,
+        status_code: int,
+        error_message: str,
+    ) -> str:
+        """Format a meaningful error message based on failure classification."""
+        if failure_type == FailureType.AUTHENTICATION_FAILURE:
+            return f"Provider '{provider_name}' authentication failed (HTTP {status_code}). Check API key."
+        elif failure_type == FailureType.MODEL_NOT_FOUND:
+            return f"Provider '{provider_name}' model not found (HTTP {status_code}). Model may be unavailable or renamed."
+        elif failure_type == FailureType.INVALID_REQUEST:
+            return f"Provider '{provider_name}' rejected request (HTTP {status_code}): {error_message}"
+        elif failure_type == FailureType.RATE_LIMIT:
+            return f"Provider '{provider_name}' rate limited (HTTP 429). Try another provider."
+        elif failure_type == FailureType.POLICY:
+            return f"Provider '{provider_name}' policy violation: {error_message}"
+        elif failure_type == FailureType.TIMEOUT:
+            return f"Provider '{provider_name}' request timed out."
+        elif failure_type == FailureType.TRANSIENT_PROVIDER_FAILURE:
+            return f"Provider '{provider_name}' transient failure (HTTP {status_code})."
+        else:
+            return f"Provider '{provider_name}' failed: {error_message}"
 
     async def _select_providers(
         self,
@@ -408,11 +729,12 @@ class AIGateway:
             provider_name, config, api_key, request
         )
 
+        timeout = config.get("timeout", 30)
         response = await client.post(
             url,
             json=payload,
             headers=headers,
-            timeout=config.get("timeout", 30),
+            timeout=timeout,
         )
         response.raise_for_status()
         return response.json()
@@ -428,23 +750,15 @@ class AIGateway:
         base_url = config["base_url"]
 
         if provider_name == "gemini":
-            # Gemini uses different format
+            # Gemini uses different format with native system instruction support
             url = f"{base_url}/models/{request.model}:generateContent?key={api_key}"
-            # Convert messages to Gemini format
-            contents = []
-            for msg in request.messages:
-                role = "user" if msg.role in ("user", "system") else "model"
-                contents.append({
-                    "role": role,
-                    "parts": [{"text": msg.content}],
-                })
-            payload = {
-                "contents": contents,
-                "generationConfig": {
-                    "temperature": request.temperature,
-                    "maxOutputTokens": request.max_tokens,
-                },
-            }
+
+            payload = GeminiNormalizer.normalize_request_for_gemini(
+                messages=request.messages,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+                top_p=request.top_p,
+            )
             headers = {"Content-Type": "application/json"}
         else:
             # OpenAI-compatible format (OpenAI, Groq)
@@ -474,6 +788,7 @@ class AIGateway:
         session: AsyncSession,
         error_message: Optional[str] = None,
         error_classification: Optional[str] = None,
+        status_code: Optional[int] = None,
     ):
         """Record a provider event for observability."""
         # Get provider ID
@@ -499,7 +814,10 @@ class AIGateway:
         provider.total_requests += 1
         if not success:
             provider.total_failures += 1
-            provider.recent_429_count += 1 if error_classification == "retryable" else 0
+            # Track 429 separately from other retryable failures
+            if error_classification == "rate_limit":
+                provider.recent_429_count += 1
+            # Note: recent_429_count is ONLY for actual 429s, not all retryable errors
 
         # Update success rate
         if provider.total_requests > 0:

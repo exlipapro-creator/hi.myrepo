@@ -90,40 +90,51 @@ class TestCircuitBreaker:
 
 
 class TestFailureClassification:
-    """Test failure classification logic."""
+    """Test failure classification logic with fine-grained categories."""
 
     def test_retryable_on_timeout(self):
-        assert classify_failure(408, "Request timeout") == FailureType.RETRYABLE
+        assert classify_failure(408, "Request timeout") == FailureType.TIMEOUT
 
     def test_retryable_on_rate_limit(self):
-        assert classify_failure(429, "Rate limit exceeded") == FailureType.RETRYABLE
+        assert classify_failure(429, "Rate limit exceeded") == FailureType.RATE_LIMIT
 
     def test_retryable_on_server_error(self):
-        assert classify_failure(500, "Internal server error") == FailureType.RETRYABLE
+        assert classify_failure(500, "Internal server error") == FailureType.TRANSIENT_PROVIDER_FAILURE
 
     def test_retryable_on_bad_gateway(self):
-        assert classify_failure(502, "Bad gateway") == FailureType.RETRYABLE
+        assert classify_failure(502, "Bad gateway") == FailureType.TRANSIENT_PROVIDER_FAILURE
 
     def test_retryable_on_service_unavailable(self):
-        assert classify_failure(503, "Service unavailable") == FailureType.RETRYABLE
+        assert classify_failure(503, "Service unavailable") == FailureType.TRANSIENT_PROVIDER_FAILURE
 
     def test_non_retryable_on_unauthorized(self):
-        assert classify_failure(401, "Invalid API key") == FailureType.NON_RETRYABLE
+        assert classify_failure(401, "Invalid API key") == FailureType.AUTHENTICATION_FAILURE
 
     def test_non_retryable_on_forbidden(self):
-        assert classify_failure(403, "Access denied") == FailureType.NON_RETRYABLE
+        assert classify_failure(403, "Access denied") == FailureType.POLICY
 
     def test_non_retryable_on_not_found(self):
-        assert classify_failure(404, "Model not found") == FailureType.NON_RETRYABLE
+        assert classify_failure(404, "Model not found") == FailureType.MODEL_NOT_FOUND
 
     def test_non_retryable_on_bad_request(self):
-        assert classify_failure(400, "Invalid parameters") == FailureType.NON_RETRYABLE
+        assert classify_failure(400, "Invalid parameters") == FailureType.INVALID_REQUEST
 
     def test_policy_on_quota_exceeded(self):
-        assert classify_failure(429, "Quota exceeded for this month") == FailureType.POLICY
+        # 429 takes precedence as rate_limit even with quota message
+        assert classify_failure(429, "Quota exceeded for this month") == FailureType.RATE_LIMIT
 
     def test_policy_on_disabled(self):
         assert classify_failure(403, "Provider disabled") == FailureType.POLICY
 
     def test_retryable_on_generic_error(self):
-        assert classify_failure(500, "Something went wrong") == FailureType.RETRYABLE
+        assert classify_failure(500, "Something went wrong") == FailureType.TRANSIENT_PROVIDER_FAILURE
+
+    def test_is_retryable_utility(self):
+        from app.gateway.ai_gateway import is_retryable
+        assert is_retryable(FailureType.RATE_LIMIT) is True
+        assert is_retryable(FailureType.TIMEOUT) is True
+        assert is_retryable(FailureType.TRANSIENT_PROVIDER_FAILURE) is True
+        assert is_retryable(FailureType.AUTHENTICATION_FAILURE) is False
+        assert is_retryable(FailureType.MODEL_NOT_FOUND) is False
+        assert is_retryable(FailureType.INVALID_REQUEST) is False
+        assert is_retryable(FailureType.POLICY) is False

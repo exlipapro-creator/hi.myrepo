@@ -122,7 +122,12 @@ async def seed_ai_providers(session: AsyncSession) -> int:
             "name": "gemini",
             "api_key_env": "gemini_api_key",
             "capabilities": ["text", "vision", "reasoning", "code", "long_context"],
-            "models": ["gemini-2.0-flash", "gemini-2.0-pro", "gemini-1.5-flash"],
+            "models": [
+                "gemini-2.5-flash",
+                "gemini-2.5-pro",
+                "gemini-3.5-flash",
+                "gemini-3.5-flash-lite",
+            ],
         },
         {
             "name": "openai",
