@@ -25,10 +25,12 @@ from app.database.models import (
 
 logger = structlog.get_logger()
 
-# Resolve paths relative to the project root
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-SEEDS_DIR = PROJECT_ROOT / "database" / "seeds"
-POLICIES_DIR = PROJECT_ROOT / "database" / "policies"
+# Resolve paths relative to the backend directory
+# In Docker: /app/app/database/seeds.py -> /app/ (3 levels up)
+# Locally: backend/app/database/seeds.py -> backend/ (3 levels up)
+BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+SEEDS_DIR = BACKEND_DIR / "database" / "seeds"
+POLICIES_DIR = BACKEND_DIR / "database" / "policies"
 
 
 async def seed_runbooks(session: AsyncSession) -> int:

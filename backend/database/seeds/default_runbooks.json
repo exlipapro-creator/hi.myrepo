@@ -1,0 +1,159 @@
+[
+  {
+    "code": "RB-01",
+    "name": "Service Restart",
+    "description": "Restart a service to recover from transient failures. Low risk, commonly reversible.",
+    "status": "ACTIVE",
+    "preconditions": {
+      "service_must_be_running": true,
+      "transient_failure_confirmed": true
+    },
+    "authorization_requirements": {
+      "min_autonomy_level": 2,
+      "requires_approval": true
+    },
+    "execution_steps": [
+      {"step": 1, "action": "stop_service", "description": "Gracefully stop the target service"},
+      {"step": 2, "action": "wait", "duration_seconds": 5, "description": "Wait for graceful shutdown"},
+      {"step": 3, "action": "start_service", "description": "Start the target service"},
+      {"step": 4, "action": "health_check", "description": "Verify service is responding to health checks"},
+      {"step": 5, "action": "observe_error_rate", "duration_seconds": 60, "description": "Monitor error rate for 60 seconds"}
+    ],
+    "rollback_strategy": "Service was already running before; no rollback needed.",
+    "verification_procedure": {
+      "type": "health_check",
+      "required_consecutive_passes": 3,
+      "check_interval_seconds": 10,
+      "max_verification_duration_seconds": 120
+    },
+    "timeout_seconds": 300,
+    "max_blast_radius": "low",
+    "is_reversible": true,
+    "required_autonomy_level": 2
+  },
+  {
+    "code": "RB-02",
+    "name": "Cache Clear",
+    "description": "Clear application cache to resolve stale data issues.",
+    "status": "ACTIVE",
+    "preconditions": {
+      "cache_service_available": true,
+      "stale_data_suspected": true
+    },
+    "authorization_requirements": {
+      "min_autonomy_level": 2,
+      "requires_approval": true
+    },
+    "execution_steps": [
+      {"step": 1, "action": "clear_cache", "description": "Clear the application cache"},
+      {"step": 2, "action": "warm_cache", "description": "Warm cache with expected data"},
+      {"step": 3, "action": "health_check", "description": "Verify service health"}
+    ],
+    "rollback_strategy": "Cache will self-populate on next access.",
+    "verification_procedure": {
+      "type": "health_check",
+      "required_consecutive_passes": 3,
+      "check_interval_seconds": 5
+    },
+    "timeout_seconds": 120,
+    "max_blast_radius": "low",
+    "is_reversible": true,
+    "required_autonomy_level": 2
+  },
+  {
+    "code": "RB-03",
+    "name": "Dependency Failover",
+    "description": "Switch to a backup dependency when the primary is unhealthy.",
+    "status": "ACTIVE",
+    "preconditions": {
+      "backup_dependency_configured": true,
+      "primary_dependency_unhealthy": true
+    },
+    "authorization_requirements": {
+      "min_autonomy_level": 3,
+      "requires_approval": true
+    },
+    "execution_steps": [
+      {"step": 1, "action": "verify_backup", "description": "Verify backup dependency is healthy"},
+      {"step": 2, "action": "switch_traffic", "description": "Route traffic to backup dependency"},
+      {"step": 3, "action": "health_check", "description": "Verify service health after failover"}
+    ],
+    "rollback_strategy": "Switch traffic back to primary when it recovers.",
+    "verification_procedure": {
+      "type": "health_check",
+      "required_consecutive_passes": 5,
+      "check_interval_seconds": 10
+    },
+    "timeout_seconds": 180,
+    "max_blast_radius": "medium",
+    "is_reversible": true,
+    "required_autonomy_level": 3
+  },
+  {
+    "code": "RB-04",
+    "name": "Automated Deployment Rollback",
+    "description": "Rollback a deployment when a regression is detected with high confidence.",
+    "status": "ACTIVE",
+    "preconditions": {
+      "deployment_regression_detected": true,
+      "rollback_target_available": true
+    },
+    "authorization_requirements": {
+      "min_autonomy_level": 4,
+      "requires_approval": true,
+      "conditions": {
+        "confidence": {"op": "gte", "value": 0.85},
+        "blast_radius": {"op": "in", "value": ["low", "medium"]}
+      }
+    },
+    "execution_steps": [
+      {"step": 1, "action": "snapshot_current", "description": "Snapshot current state for forensic analysis"},
+      {"step": 2, "action": "rollback_deployment", "description": "Execute deployment rollback"},
+      {"step": 3, "action": "wait", "duration_seconds": 30, "description": "Wait for rollback to propagate"},
+      {"step": 4, "action": "health_check", "description": "Verify service health post-rollback"},
+      {"step": 5, "action": "observe_error_rate", "duration_seconds": 120, "description": "Monitor error rate for 120 seconds"},
+      {"step": 6, "action": "compare_metrics", "description": "Compare pre/post rollback metrics"}
+    ],
+    "rollback_strategy": "Re-deploy the rolled-back version if rollback itself causes issues.",
+    "verification_procedure": {
+      "type": "health_check",
+      "required_consecutive_passes": 3,
+      "check_interval_seconds": 15,
+      "max_verification_duration_seconds": 300
+    },
+    "timeout_seconds": 600,
+    "max_blast_radius": "medium",
+    "is_reversible": true,
+    "required_autonomy_level": 4
+  },
+  {
+    "code": "RB-05",
+    "name": "Queue Drain and Retry",
+    "description": "Drain a stuck queue and retry failed messages.",
+    "status": "ACTIVE",
+    "preconditions": {
+      "queue_available": true,
+      "queue_backlog_detected": true
+    },
+    "authorization_requirements": {
+      "min_autonomy_level": 3,
+      "requires_approval": true
+    },
+    "execution_steps": [
+      {"step": 1, "action": "pause_ingestion", "description": "Temporarily pause queue ingestion"},
+      {"step": 2, "action": "drain_queue", "description": "Process or dead-letter stuck messages"},
+      {"step": 3, "action": "resume_ingestion", "description": "Resume queue ingestion"},
+      {"step": 4, "action": "health_check", "description": "Verify queue is processing normally"}
+    ],
+    "rollback_strategy": "Messages are preserved in dead-letter queue for manual review.",
+    "verification_procedure": {
+      "type": "health_check",
+      "required_consecutive_passes": 3,
+      "check_interval_seconds": 10
+    },
+    "timeout_seconds": 300,
+    "max_blast_radius": "medium",
+    "is_reversible": true,
+    "required_autonomy_level": 3
+  }
+]
