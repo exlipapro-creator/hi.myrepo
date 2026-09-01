@@ -16,6 +16,7 @@ from sqlalchemy import select
 from app.database.connection import db_manager
 from app.database.models import MonitoredTarget, Project
 from app.security.auth import TokenData, get_current_user, require_project_access
+import uuid as _uuid
 
 router = APIRouter()
 
@@ -167,6 +168,7 @@ async def get_target(
         target = result.scalar_one_or_none()
         if not target:
             raise HTTPException(status_code=404, detail="Target not found")
+        await require_project_access(target.project_id, user)
 
         return MonitoredTargetResponse(
             id=str(target.id),
@@ -200,6 +202,7 @@ async def update_target(
         target = result.scalar_one_or_none()
         if not target:
             raise HTTPException(status_code=404, detail="Target not found")
+        await require_project_access(target.project_id, user)
 
         if req.url is not None:
             from app.security.ssrf import ssrf_protector, SSRFError
@@ -257,6 +260,7 @@ async def delete_target(
         target = result.scalar_one_or_none()
         if not target:
             raise HTTPException(status_code=404, detail="Target not found")
+        await require_project_access(target.project_id, user)
 
         await session.delete(target)
         await session.flush()

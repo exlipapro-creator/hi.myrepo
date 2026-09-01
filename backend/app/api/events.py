@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.connection import db_manager
 from app.database.models import Event
 from app.events.spine import EventEnvelope, EventProcessor, event_processor
-from app.security.auth import TokenData, get_current_user, require_project_access
+from app.security.auth import TokenData, get_current_user, require_project_access, get_user_project_ids
 
 router = APIRouter()
 
@@ -167,14 +167,21 @@ async def list_events(
     user: TokenData = Depends(get_current_user),
 ):
     """Query events with filtering."""
-    # Verify project access if project_id specified
     if project_id:
         await require_project_access(project_id, user)
+    else:
+        # Scope to user's organization projects
+        user_project_ids = await get_user_project_ids(user)
+        if not user_project_ids:
+            return {"events": [], "total": 0, "limit": limit, "offset": offset}
+
     async with db_manager.get_session() as session:
         query = select(Event)
 
         if project_id:
             query = query.where(Event.project_id == project_id)
+        elif not project_id:
+            query = query.where(Event.project_id.in_(user_project_ids))
         if event_type:
             query = query.where(Event.event_type == event_type)
         if severity:
@@ -220,14 +227,20 @@ async def event_stats(
     project_id: Optional[uuid.UUID] = None,
     user: TokenData = Depends(get_current_user),
 ):
-    # Verify project access if project_id specified
+    """Get event statistics."""
     if project_id:
         await require_project_access(project_id, user)
-    """Get event statistics."""
+    else:
+        user_project_ids = await get_user_project_ids(user)
+        if not user_project_ids:
+            return EventStatsResponse(total_events=0, by_type={}, by_severity={})
+
     async with db_manager.get_session() as session:
         base_query = select(Event)
         if project_id:
             base_query = base_query.where(Event.project_id == project_id)
+        else:
+            base_query = base_query.where(Event.project_id.in_(user_project_ids))
 
         # Total
         total = (await session.execute(
@@ -241,6 +254,8 @@ async def event_stats(
         )
         if project_id:
             type_query = type_query.where(Event.project_id == project_id)
+        else:
+            type_query = type_query.where(Event.project_id.in_(user_project_ids))
         type_result = await session.execute(type_query)
         by_type = {row[0]: row[1] for row in type_result.all()}
 
@@ -252,6 +267,8 @@ async def event_stats(
         )
         if project_id:
             sev_query = sev_query.where(Event.project_id == project_id)
+        else:
+            sev_query = sev_query.where(Event.project_id.in_(user_project_ids))
         sev_result = await session.execute(sev_query)
         by_severity = {row[0]: row[1] for row in sev_result.all()}
 

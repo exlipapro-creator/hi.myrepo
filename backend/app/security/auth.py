@@ -89,7 +89,7 @@ def decode_token(token: str) -> TokenData:
             organization_id=payload["org_id"],
             autonomy_level=payload.get("autonomy_level", 0),
         )
-    except JWTError as e:
+    except (JWTError, KeyError) as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token: {str(e)}",
@@ -202,3 +202,52 @@ async def require_incident_access(
         await require_project_access(incident.project_id, user)
 
     return user, incident
+
+
+async def get_user_project_ids(user: TokenData) -> list[uuid.UUID]:
+    """
+    Return all project IDs owned by the user's organization.
+
+    Used by list endpoints to scope queries to the user's organization
+    when no specific project_id is provided.
+    """
+    from sqlalchemy import select
+    from app.database.connection import db_manager
+    from app.database.models import Project
+
+    async with db_manager.get_session() as session:
+        result = await session.execute(
+            select(Project.id).where(
+                Project.organization_id == user.organization_id,
+                Project.is_active == True,
+            )
+        )
+        return [row[0] for row in result.all()]
+
+
+async def require_deployment_access(
+    deployment_id: uuid.UUID,
+    user: TokenData,
+) -> uuid.UUID:
+    """
+    Verify the authenticated user's organization owns the deployment's project.
+    Returns the project_id for further use.
+    """
+    from sqlalchemy import select
+    from app.database.connection import db_manager
+    from app.database.models import Deployment
+
+    async with db_manager.get_session() as session:
+        result = await session.execute(
+            select(Deployment).where(Deployment.id == deployment_id)
+        )
+        deployment = result.scalar_one_or_none()
+
+        if not deployment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Deployment not found",
+            )
+
+        await require_project_access(deployment.project_id, user)
+        return deployment.project_id

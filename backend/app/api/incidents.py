@@ -19,7 +19,7 @@ from app.database.models import (
     IncidentStateTransition,
 )
 from app.incidents.engine import IncidentCreate, incident_engine
-from app.security.auth import TokenData, get_current_user, require_project_access
+from app.security.auth import TokenData, get_current_user, require_project_access, get_user_project_ids
 
 router = APIRouter()
 
@@ -81,11 +81,17 @@ async def list_incidents(
     """List incidents with filtering."""
     if project_id:
         await require_project_access(project_id, user)
+    else:
+        user_project_ids = await get_user_project_ids(user)
+        if not user_project_ids:
+            return []
     async with db_manager.get_session() as session:
         query = select(Incident)
 
         if project_id:
             query = query.where(Incident.project_id == project_id)
+        else:
+            query = query.where(Incident.project_id.in_(user_project_ids))
         if status_filter:
             query = query.where(Incident.status == status_filter)
         if severity:
@@ -124,11 +130,17 @@ async def incident_stats(
 ):
     if project_id:
         await require_project_access(project_id, user)
+    else:
+        user_project_ids = await get_user_project_ids(user)
+        if not user_project_ids:
+            return IncidentStatsResponse(total=0, by_status={}, by_severity={})
     """Get incident statistics."""
     async with db_manager.get_session() as session:
         base = select(Incident)
         if project_id:
             base = base.where(Incident.project_id == project_id)
+        else:
+            base = base.where(Incident.project_id.in_(user_project_ids))
 
         total = (await session.execute(
             select(func.count()).select_from(base.subquery())
@@ -138,6 +150,8 @@ async def incident_stats(
         status_q = select(Incident.status, func.count()).group_by(Incident.status)
         if project_id:
             status_q = status_q.where(Incident.project_id == project_id)
+        else:
+            status_q = status_q.where(Incident.project_id.in_(user_project_ids))
         status_r = await session.execute(status_q)
         by_status = {row[0]: row[1] for row in status_r.all()}
 
@@ -145,6 +159,8 @@ async def incident_stats(
         sev_q = select(Incident.severity, func.count()).group_by(Incident.severity)
         if project_id:
             sev_q = sev_q.where(Incident.project_id == project_id)
+        else:
+            sev_q = sev_q.where(Incident.project_id.in_(user_project_ids))
         sev_r = await session.execute(sev_q)
         by_severity = {row[0]: row[1] for row in sev_r.all()}
 

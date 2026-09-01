@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 
 from app.database.connection import db_manager
 from app.database.models import AuditLog
-from app.security.auth import TokenData, get_current_user, require_project_access
+from app.security.auth import TokenData, get_current_user, require_project_access, get_user_project_ids
 
 router = APIRouter()
 
@@ -31,6 +31,10 @@ async def list_audit_logs(
     """Query audit logs with filtering."""
     if project_id:
         await require_project_access(project_id, user)
+    else:
+        user_project_ids = await get_user_project_ids(user)
+        if not user_project_ids:
+            return {"logs": [], "total": 0, "limit": limit, "offset": offset}
     async with db_manager.get_session() as session:
         query = select(AuditLog)
 
@@ -42,6 +46,9 @@ async def list_audit_logs(
             query = query.where(AuditLog.resource_type == resource_type)
         if project_id:
             query = query.where(AuditLog.project_id == project_id)
+        else:
+            # Scope to user's org projects
+            query = query.where(AuditLog.project_id.in_(user_project_ids))
         if incident_id:
             query = query.where(AuditLog.incident_id == incident_id)
 

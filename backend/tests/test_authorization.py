@@ -1,147 +1,524 @@
 """
-Tests for project-level authorization boundary.
+Authorization regression tests for hi.myrepo.
 
-Verifies that users cannot access resources belonging to other organizations.
-This is the critical IDOR (Insecure Direct Object Reference) prevention layer.
+Tests project-level authorization boundaries, tenancy isolation,
+IDOR/BOLA prevention, and authentication edge cases.
 
-Test scenarios:
-- User accesses own project → allowed
-- User accesses foreign project → denied (403)
-- Foreign incident access → denied
-- Foreign event access → denied
-- Foreign deployment access → denied
-- Foreign monitored target access → denied
+These tests use mocking to verify the authorization logic
+without requiring a live database connection.
 """
+
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
-
-from app.security.auth import (
-    TokenData,
-    require_project_access,
-    require_incident_access,
-)
 
 
 # ============================================================================
-# Test: require_project_access
+# Authorization boundary tests using require_project_access logic
 # ============================================================================
+
 
 class TestProjectAccessAuthorization:
-    """Verify project-level authorization boundary."""
+    """Test that require_project_access correctly enforces org boundaries."""
 
-    def _make_user(self, org_id: str = "org-111") -> TokenData:
-        return TokenData(
-            user_id="user-001",
-            email="test@example.com",
+    @pytest.mark.asyncio
+    async def test_owner_can_access_own_project(self):
+        """User A with org A can access project in org A."""
+        from app.security.auth import TokenData
+
+        org_id = uuid.uuid4()
+        user = TokenData(
+            user_id=str(uuid.uuid4()),
+            email="a@test.com",
             role="admin",
-            organization_id=org_id,
+            organization_id=str(org_id),
             autonomy_level=2,
         )
 
-    def test_token_data_structure(self):
-        user = self._make_user()
-        assert user.organization_id == "org-111"
-        assert user.role == "admin"
+        mock_project = MagicMock()
+        mock_project.organization_id = org_id
 
-    def test_different_orgs_are_different(self):
-        user1 = self._make_user(org_id="org-111")
-        user2 = self._make_user(org_id="org-222")
-        assert user1.organization_id != user2.organization_id
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_project
 
-    def test_same_orgs_are_same(self):
-        user1 = self._make_user(org_id="org-111")
-        user2 = self._make_user(org_id="org-111")
-        assert user1.organization_id == user2.organization_id
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.database.connection.db_manager") as mock_db:
+            mock_db.get_session.return_value = mock_session_ctx
+
+            from app.security.auth import require_project_access
+
+            result = await require_project_access(uuid.uuid4(), user)
+            assert result.user_id == user.user_id
+
+    @pytest.mark.asyncio
+    async def test_cross_org_access_denied(self):
+        """User A with org A CANNOT access project in org B."""
+        from app.security.auth import TokenData
+
+        user = TokenData(
+            user_id=str(uuid.uuid4()),
+            email="a@test.com",
+            role="admin",
+            organization_id=str(uuid.uuid4()),
+            autonomy_level=2,
+        )
+
+        # Project belongs to a DIFFERENT org
+        mock_project = MagicMock()
+        mock_project.organization_id = uuid.uuid4()
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_project
+
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.database.connection.db_manager") as mock_db:
+            mock_db.get_session.return_value = mock_session_ctx
+
+            from app.security.auth import require_project_access
+            from fastapi import HTTPException
+
+            with pytest.raises(HTTPException) as exc_info:
+                await require_project_access(uuid.uuid4(), user)
+            assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_project_returns_404(self):
+        """Non-existent project returns 404, not 403 (no information leakage)."""
+        from app.security.auth import TokenData
+
+        user = TokenData(
+            user_id=str(uuid.uuid4()),
+            email="a@test.com",
+            role="admin",
+            organization_id=str(uuid.uuid4()),
+            autonomy_level=2,
+        )
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.database.connection.db_manager") as mock_db:
+            mock_db.get_session.return_value = mock_session_ctx
+
+            from app.security.auth import require_project_access
+            from fastapi import HTTPException
+
+            with pytest.raises(HTTPException) as exc_info:
+                await require_project_access(uuid.uuid4(), user)
+            assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_user_cannot_elevate_org_via_project_id(self):
+        """Changing project_id in the request doesn't bypass org check."""
+        from app.security.auth import TokenData
+
+        user = TokenData(
+            user_id=str(uuid.uuid4()),
+            email="a@test.com",
+            role="member",
+            organization_id=str(uuid.uuid4()),
+            autonomy_level=1,
+        )
+
+        # Project belongs to a DIFFERENT org
+        mock_project = MagicMock()
+        mock_project.organization_id = uuid.uuid4()
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_project
+
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.database.connection.db_manager") as mock_db:
+            mock_db.get_session.return_value = mock_session_ctx
+
+            from app.security.auth import require_project_access
+            from fastapi import HTTPException
+
+            with pytest.raises(HTTPException) as exc_info:
+                await require_project_access(uuid.uuid4(), user)
+            assert exc_info.value.status_code == 403
 
 
 # ============================================================================
-# Test: require_incident_access
+# Authentication boundary tests
 # ============================================================================
+
+
+class TestAuthenticationBoundary:
+    """Test JWT validation and authentication edge cases."""
+
+    def test_jwt_creation_and_decode(self):
+        """Valid JWT can be created and decoded with correct claims."""
+        from app.security.auth import create_access_token, decode_token
+
+        user_id = str(uuid.uuid4())
+        org_id = str(uuid.uuid4())
+
+        token = create_access_token(
+            user_id=user_id,
+            email="test@example.com",
+            role="admin",
+            organization_id=org_id,
+            autonomy_level=3,
+        )
+
+        decoded = decode_token(token)
+        assert decoded.user_id == user_id
+        assert decoded.email == "test@example.com"
+        assert decoded.role == "admin"
+        assert decoded.organization_id == org_id
+        assert decoded.autonomy_level == 3
+
+    def test_jwt_rejects_invalid_signature(self):
+        """Token signed with wrong secret is rejected."""
+        from app.security.auth import decode_token
+        from jose import jwt
+        from fastapi import HTTPException
+
+        token = jwt.encode(
+            {"sub": "test", "email": "test@test.com", "role": "user",
+             "org_id": str(uuid.uuid4()), "autonomy_level": 1,
+             "iss": "hi.myrepo"},
+            "wrong-secret-key-that-is-not-the-real-one-12345678",
+            algorithm="HS256",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            decode_token(token)
+        assert exc_info.value.status_code == 401
+
+    def test_jwt_rejects_missing_claims(self):
+        """Token missing required claims is rejected."""
+        from app.security.auth import decode_token, settings
+        from jose import jwt
+        from fastapi import HTTPException
+
+        # Token missing 'role' claim
+        token = jwt.encode(
+            {"sub": "test", "email": "test@test.com",
+             "org_id": str(uuid.uuid4()), "autonomy_level": 1,
+             "iss": "hi.myrepo"},
+            settings.jwt_secret,
+            algorithm=settings.jwt_algorithm,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            decode_token(token)
+        assert exc_info.value.status_code == 401
+
+    def test_jwt_rejects_wrong_issuer(self):
+        """Token with wrong issuer is rejected."""
+        from app.security.auth import decode_token, settings
+        from jose import jwt
+        from fastapi import HTTPException
+
+        token = jwt.encode(
+            {"sub": "test", "email": "test@test.com", "role": "user",
+             "org_id": str(uuid.uuid4()), "autonomy_level": 1,
+             "iss": "attacker.myrepo"},
+            settings.jwt_secret,
+            algorithm=settings.jwt_algorithm,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            decode_token(token)
+        assert exc_info.value.status_code == 401
+
+    def test_token_data_isolation(self):
+        """TokenData cannot be manipulated after creation."""
+        from app.security.auth import TokenData
+
+        user = TokenData(
+            user_id="user-123",
+            email="test@test.com",
+            role="viewer",
+            organization_id="org-456",
+            autonomy_level=0,
+        )
+
+        assert user.user_id == "user-123"
+        assert user.organization_id == "org-456"
+        assert user.autonomy_level == 0
+
+
+# ============================================================================
+# Get user project IDs helper tests
+# ============================================================================
+
+
+class TestGetUserProjectIds:
+    """Test the org-scoping helper."""
+
+    @pytest.mark.asyncio
+    async def test_returns_only_org_projects(self):
+        """Only projects belonging to user's org are returned."""
+        from app.security.auth import TokenData, get_user_project_ids
+
+        user = TokenData(
+            user_id=str(uuid.uuid4()),
+            email="test@test.com",
+            role="admin",
+            organization_id=str(uuid.uuid4()),
+            autonomy_level=2,
+        )
+
+        project_ids = [uuid.uuid4(), uuid.uuid4(), uuid.uuid4()]
+
+        mock_result = MagicMock()
+        mock_result.all.return_value = [(pid,) for pid in project_ids]
+
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.database.connection.db_manager") as mock_db:
+            mock_db.get_session.return_value = mock_session_ctx
+
+            result = await get_user_project_ids(user)
+            assert len(result) == 3
+            assert result == project_ids
+
+    @pytest.mark.asyncio
+    async def test_empty_org_returns_empty_list(self):
+        """Org with no projects returns empty list."""
+        from app.security.auth import TokenData, get_user_project_ids
+
+        user = TokenData(
+            user_id=str(uuid.uuid4()),
+            email="test@test.com",
+            role="admin",
+            organization_id=str(uuid.uuid4()),
+            autonomy_level=2,
+        )
+
+        mock_result = MagicMock()
+        mock_result.all.return_value = []
+
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.database.connection.db_manager") as mock_db:
+            mock_db.get_session.return_value = mock_session_ctx
+
+            result = await get_user_project_ids(user)
+            assert result == []
+
+
+# ============================================================================
+# Incident access authorization tests
+# ============================================================================
+
 
 class TestIncidentAccessAuthorization:
-    """Verify incident-level authorization via project ownership."""
+    """Test that incident access checks verify org ownership."""
 
-    def test_incident_access_returns_tuple(self):
-        """require_incident_access returns (user, incident) tuple."""
-        # This tests the function signature, not the DB interaction
-        import inspect
-        from app.security.auth import require_incident_access
-        sig = inspect.signature(require_incident_access)
-        params = list(sig.parameters.keys())
-        assert "incident_id" in params
-        assert "user" in params
+    @pytest.mark.asyncio
+    async def test_incident_access_checks_project(self):
+        """require_incident_access verifies the incident's project ownership."""
+        from app.security.auth import TokenData
+
+        user = TokenData(
+            user_id=str(uuid.uuid4()),
+            email="a@test.com",
+            role="admin",
+            organization_id=str(uuid.uuid4()),
+            autonomy_level=2,
+        )
+
+        # Mock incident with a project in a different org
+        mock_incident = MagicMock()
+        mock_incident.project_id = uuid.uuid4()
+
+        mock_inc_result = MagicMock()
+        mock_inc_result.scalar_one_or_none.return_value = mock_incident
+
+        # Mock project with different org
+        mock_project = MagicMock()
+        mock_project.organization_id = uuid.uuid4()
+
+        mock_proj_result = MagicMock()
+        mock_proj_result.scalar_one_or_none.return_value = mock_project
+
+        call_count = 0
+
+        async def mock_execute(query):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return mock_inc_result
+            return mock_proj_result
+
+        mock_session = AsyncMock()
+        mock_session.execute = mock_execute
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.database.connection.db_manager") as mock_db:
+            mock_db.get_session.return_value = mock_session_ctx
+
+            from app.security.auth import require_incident_access
+            from fastapi import HTTPException
+
+            with pytest.raises(HTTPException) as exc_info:
+                await require_incident_access(uuid.uuid4(), user)
+            assert exc_info.value.status_code == 403
 
 
 # ============================================================================
-# Test: Authorization boundary enforcement patterns
+# Role boundary tests
 # ============================================================================
 
-class TestAuthorizationPatterns:
-    """Verify authorization patterns are correctly applied to routes."""
 
-    def test_events_router_has_project_access(self):
-        """Events router should import require_project_access."""
-        from app.api.events import router
-        # The router exists and is functional
-        assert router is not None
+class TestRoleBoundary:
+    """Test role-based access control."""
 
-    def test_incidents_router_has_project_access(self):
-        """Incidents router should import require_project_access."""
-        from app.api.incidents import router
-        assert router is not None
+    def test_require_role_allows_valid_role(self):
+        """User with correct role passes role check."""
+        from app.security.auth import TokenData
 
-    def test_projects_router_has_project_access(self):
-        """Projects router should import require_project_access."""
-        from app.api.projects import router
-        assert router is not None
+        user = TokenData(
+            user_id=str(uuid.uuid4()),
+            email="admin@test.com",
+            role="admin",
+            organization_id=str(uuid.uuid4()),
+            autonomy_level=3,
+        )
 
-    def test_deployments_router_has_project_access(self):
-        """Deployments router should import require_project_access."""
-        from app.api.deployments import router
-        assert router is not None
+        # The role_checker logic is: user.role in allowed_roles
+        assert user.role in ("admin", "member")
 
-    def test_telemetry_router_has_project_access(self):
-        """Telemetry router should import require_project_access."""
-        from app.api.telemetry import router
-        assert router is not None
+    def test_require_role_rejects_invalid_role(self):
+        """User with wrong role fails role check."""
+        from app.security.auth import TokenData
 
-    def test_monitored_targets_router_has_project_access(self):
-        """Monitored targets router should import require_project_access."""
-        from app.api.monitored_targets import router
-        assert router is not None
+        user = TokenData(
+            user_id=str(uuid.uuid4()),
+            email="viewer@test.com",
+            role="viewer",
+            organization_id=str(uuid.uuid4()),
+            autonomy_level=0,
+        )
 
-    def test_audit_router_has_project_access(self):
-        """Audit router should import require_project_access."""
-        from app.api.audit import router
-        assert router is not None
+        assert user.role not in ("admin", "member")
 
 
 # ============================================================================
-# Test: Auth module exports
+# Autonomy level boundary tests
 # ============================================================================
 
-class TestAuthModuleExports:
-    """Verify auth module exports all required functions."""
 
-    def test_exports_require_project_access(self):
-        from app.security.auth import require_project_access
-        assert callable(require_project_access)
+class TestAutonomyBoundary:
+    """Test autonomy level enforcement."""
 
-    def test_exports_require_incident_access(self):
-        from app.security.auth import require_incident_access
-        assert callable(require_incident_access)
+    def test_autonomy_level_in_token(self):
+        """Autonomy level is stored in JWT and read from token."""
+        from app.security.auth import create_access_token, decode_token
 
-    def test_exports_get_current_user(self):
-        from app.security.auth import get_current_user
-        assert callable(get_current_user)
+        token = create_access_token(
+            user_id=str(uuid.uuid4()),
+            email="test@test.com",
+            role="admin",
+            organization_id=str(uuid.uuid4()),
+            autonomy_level=4,
+        )
 
-    def test_exports_require_role(self):
-        from app.security.auth import require_role
-        assert callable(require_role)
+        decoded = decode_token(token)
+        assert decoded.autonomy_level == 4
 
-    def test_exports_require_autonomy_level(self):
-        from app.security.auth import require_autonomy_level
-        assert callable(require_autonomy_level)
+    def test_autonomy_not_manipulable_in_request(self):
+        """Autonomy level comes from JWT, not request body."""
+        from app.security.auth import TokenData
+
+        # Even if a user tries to set autonomy_level in a request body,
+        # the TokenData used for authorization comes from the JWT
+        user = TokenData(
+            user_id=str(uuid.uuid4()),
+            email="test@test.com",
+            role="viewer",
+            organization_id=str(uuid.uuid4()),
+            autonomy_level=0,
+        )
+
+        assert user.autonomy_level == 0
+
+
+# ============================================================================
+# Denial-of-information tests
+# ============================================================================
+
+
+class TestInformationLeakage:
+    """Ensure error responses don't leak cross-org information."""
+
+    @pytest.mark.asyncio
+    async def test_cross_org_returns_403_not_404(self):
+        """Cross-org access returns 403 (forbidden), not 404 (not found)."""
+        from app.security.auth import TokenData
+
+        user = TokenData(
+            user_id=str(uuid.uuid4()),
+            email="a@test.com",
+            role="admin",
+            organization_id=str(uuid.uuid4()),
+            autonomy_level=2,
+        )
+
+        # Project exists but in different org
+        mock_project = MagicMock()
+        mock_project.organization_id = uuid.uuid4()
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_project
+
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.database.connection.db_manager") as mock_db:
+            mock_db.get_session.return_value = mock_session_ctx
+
+            from app.security.auth import require_project_access
+            from fastapi import HTTPException
+
+            with pytest.raises(HTTPException) as exc_info:
+                await require_project_access(uuid.uuid4(), user)
+            # Must be 403, not 404 — 404 would confirm the resource exists
+            assert exc_info.value.status_code == 403

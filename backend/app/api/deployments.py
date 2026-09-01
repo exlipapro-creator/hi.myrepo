@@ -17,7 +17,7 @@ from app.database.connection import db_manager
 from app.database.models import Deployment, Project
 from app.events.spine import EventEnvelope
 from app.pipeline.orchestrator import pipeline
-from app.security.auth import TokenData, get_current_user, require_project_access
+from app.security.auth import TokenData, get_current_user, require_project_access, get_user_project_ids, require_deployment_access
 
 router = APIRouter()
 
@@ -140,10 +140,16 @@ async def list_deployments(
     """List deployments."""
     if project_id:
         await require_project_access(project_id, user)
+    else:
+        user_project_ids = await get_user_project_ids(user)
+        if not user_project_ids:
+            return []
     async with db_manager.get_session() as session:
         query = select(Deployment)
         if project_id:
             query = query.where(Deployment.project_id == project_id)
+        else:
+            query = query.where(Deployment.project_id.in_(user_project_ids))
         query = query.order_by(Deployment.created_at.desc()).limit(limit).offset(offset)
 
         result = await session.execute(query)
@@ -172,6 +178,7 @@ async def get_deployment(
     user: TokenData = Depends(get_current_user),
 ):
     """Get a single deployment."""
+    await require_deployment_access(deployment_id, user)
     async with db_manager.get_session() as session:
         result = await session.execute(
             select(Deployment).where(Deployment.id == deployment_id)

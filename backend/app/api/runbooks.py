@@ -12,7 +12,7 @@ from sqlalchemy import select
 from app.database.connection import db_manager
 from app.database.models import Runbook, RunbookExecution, RunbookStatus
 from app.runbooks.engine import RunbookProposal, runbook_engine
-from app.security.auth import TokenData, get_current_user
+from app.security.auth import TokenData, get_current_user, require_incident_access
 
 router = APIRouter()
 
@@ -137,6 +137,8 @@ async def get_execution_history(
     user: TokenData = Depends(get_current_user),
 ):
     """Get runbook execution history for an incident."""
+    # Verify user's org owns this incident
+    await require_incident_access(incident_id, user)
     async with db_manager.get_session() as session:
         executions = await runbook_engine.get_execution_history(incident_id, session)
         return [
