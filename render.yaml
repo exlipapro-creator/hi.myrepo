@@ -1,0 +1,30 @@
+# ============================================================================
+# hi.myrepo - Render Deployment Configuration
+# ============================================================================
+
+services:
+  - type: web
+    name: hi-myrepo-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: "false"
+      - key: DATABASE_URL
+        sync: false  # Set manually in Render dashboard
+      - key: JWT_SECRET
+        generateValue: true
+      - key: APP_SECRET_KEY
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false  # Set manually in Render dashboard
+      - key: FRONTEND_ORIGIN
+        sync: false  # Set to your Vercel URL
+      - key: APP_PORT
+        value: "8000"
+    healthCheckPath: /health
+    autoDeploy: false
+    plan: free
