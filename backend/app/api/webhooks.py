@@ -51,10 +51,17 @@ _MAX_GITHUB_PAYLOAD = 500_000        # 500 KB for GitHub events
 _FRESHNESS_WINDOW_SECONDS = 600  # 10 minutes — reject webhooks older than this
 
 # Replay protection: store recent webhook IDs in memory
-# In production, use Redis or a database table
+# SECURITY BOUNDARY: This is an in-memory implementation.
+# Limitations:
+#   - Replay IDs are lost on process restart (5-minute window resets)
+#   - Not shared across multiple instances (each instance has independent state)
+#   - Safe for single-instance deployments (the current target topology)
+#   - For multi-instance deployments, replace with Redis or database-backed store
+# This is documented in docs/audits/production-readiness.md
 _seen_webhook_ids: dict[str, datetime] = {}
 _MAX_SEEN_IDS = 10_000
 _REPLAY_WINDOW_SECONDS = 300  # 5 minutes
+_replay_implementation = "in-memory-single-instance"
 
 # Allowed event types that custom webhooks can create
 # This prevents an attacker from injecting arbitrary event types
@@ -460,23 +467,31 @@ async def _resolve_project_from_repo(repo_url: str) -> Optional[uuid.UUID]:
 
     from sqlalchemy import select
 
-    async with db_manager.get_session() as session:
-        result = await session.execute(
-            select(Project).where(Project.repository_url == repo_url)
-        )
-        project = result.scalar_one_or_none()
-        return project.id if project else None
+    try:
+        async with db_manager.get_session() as session:
+            result = await session.execute(
+                select(Project).where(Project.repository_url == repo_url)
+            )
+            project = result.scalar_one_or_none()
+            return project.id if project else None
+    except Exception as e:
+        logger.warning("webhook_db_error", operation="resolve_project_from_repo", error=str(e))
+        return None
 
 
 async def _resolve_project_from_name(name: str) -> Optional[uuid.UUID]:
     """Find a project by name or slug."""
     from sqlalchemy import select
 
-    async with db_manager.get_session() as session:
-        result = await session.execute(
-            select(Project).where(
-                (Project.slug == name) | (Project.name == name)
+    try:
+        async with db_manager.get_session() as session:
+            result = await session.execute(
+                select(Project).where(
+                    (Project.slug == name) | (Project.name == name)
+                )
             )
-        )
-        project = result.scalar_one_or_none()
-        return project.id if project else None
+            project = result.scalar_one_or_none()
+            return project.id if project else None
+    except Exception as e:
+        logger.warning("webhook_db_error", operation="resolve_project_from_name", error=str(e))
+        return None

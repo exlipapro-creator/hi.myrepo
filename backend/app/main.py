@@ -61,6 +61,17 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("configuration_valid")
 
+    # Warn about known limitations
+    if settings.is_production:
+        logger.warning(
+            "known_limitation",
+            component="webhook_replay",
+            limitation="In-memory replay protection is lost on process restart",
+            impact="Duplicate webhook delivery possible within 5-minute window after restart",
+            mitigation="Safe for single-instance deployment. For multi-instance, use Redis.",
+            documented_at="docs/audits/production-readiness.md",
+        )
+
     yield
     # Shutdown: close connections
     await db_manager.close()
