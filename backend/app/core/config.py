@@ -4,12 +4,15 @@ hi.myrepo - Core Configuration
 All configuration is loaded from environment variables.
 Secrets are NEVER hardcoded.
 """
-
 from enum import Enum
 from functools import lru_cache
-from typing import Optional
+from pathlib import Path
+
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class AppEnvironment(str, Enum):
@@ -23,12 +26,11 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=PROJECT_ROOT / ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
     )
-
     # ── Application ──────────────────────────────────────────────────────
     app_name: str = "hi.myrepo"
     app_env: AppEnvironment = AppEnvironment.DEVELOPMENT
