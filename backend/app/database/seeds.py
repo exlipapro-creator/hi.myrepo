@@ -26,7 +26,7 @@ from app.database.models import (
 logger = structlog.get_logger()
 
 # Resolve paths relative to the project root
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 SEEDS_DIR = PROJECT_ROOT / "database" / "seeds"
 POLICIES_DIR = PROJECT_ROOT / "database" / "policies"
 
@@ -145,14 +145,30 @@ async def seed_ai_providers(session: AsyncSession) -> int:
 
     created = 0
     for config in provider_configs:
-        existing = await session.execute(
+        result = await session.execute(
             select(AIProvider).where(AIProvider.name == config["name"])
         )
-        if existing.scalar_one_or_none():
-            continue
+        existing = result.scalar_one_or_none()
 
         api_key = getattr(settings, config["api_key_env"], "")
         has_key = bool(api_key)
+
+        if existing:
+            # Update stale model lists and status
+            changed = False
+            if existing.models_available != config["models"]:
+                existing.models_available = config["models"]
+                changed = True
+            if existing.capabilities != config["capabilities"]:
+                existing.capabilities = config["capabilities"]
+                changed = True
+            new_status = ProviderStatus.HEALTHY if has_key else ProviderStatus.UNKNOWN
+            if existing.status != new_status and existing.status == ProviderStatus.UNKNOWN:
+                existing.status = new_status
+                changed = True
+            if changed:
+                created += 1
+            continue
 
         provider = AIProvider(
             id=uuid.uuid4(),
