@@ -30,12 +30,12 @@ COPY . .
 RUN useradd --create-home --shell /bin/bash appuser
 USER appuser
 
-# Expose port
+# Expose default port (overridden by Railway's PORT env var)
 EXPOSE 8000
 
-# Health check
+# Health check — respects PORT env var for Railway compatibility
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the application — uses PORT env var if set (Railway), defaults to 8000 (local)
+CMD sh -c "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
