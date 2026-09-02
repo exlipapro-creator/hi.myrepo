@@ -250,15 +250,19 @@ class HeartbeatWorker:
         """Record a heartbeat result in the database."""
         try:
             async with db_manager.get_session() as session:
-                # Update target's last check state
-                target.last_check_at = datetime.now(timezone.utc)
-                target.last_status = status_code
-                target.last_latency_ms = latency_ms
-                target.is_degraded = is_degraded
-                await session.flush()
+                # Re-fetch target in this session to avoid DetachedInstanceError
+                result_q = await session.execute(
+                    select(MonitoredTarget).where(MonitoredTarget.id == target.id)
+                )
+                db_target = result_q.scalar_one_or_none()
+                if db_target:
+                    db_target.last_check_at = datetime.now(timezone.utc)
+                    db_target.last_status = status_code
+                    db_target.last_latency_ms = latency_ms
+                    db_target.is_degraded = is_degraded
 
                 # Create heartbeat result record
-                result = HeartbeatResult(
+                hr = HeartbeatResult(
                     id=uuid.uuid4(),
                     target_id=target.id,
                     status_code=status_code,
@@ -267,7 +271,7 @@ class HeartbeatWorker:
                     is_degraded=is_degraded,
                     error_message=error_message,
                 )
-                session.add(result)
+                session.add(hr)
                 await session.flush()
         except Exception as e:
             logger.error("heartbeat_record_error", target_id=str(target.id), error=str(e))
