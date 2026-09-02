@@ -646,10 +646,17 @@ class PipelineOrchestrator:
         session: AsyncSession,
         result: PipelineResult,
     ):
-        """Check if heartbeat failures form a pattern worth investigating."""
+        """Check if heartbeat failures form a pattern worth investigating.
+
+        When 3+ heartbeat failures occur within the current hour for the same project,
+        create an incident if one doesn't already exist for this fingerprint.
+        """
         from sqlalchemy import select, func
 
         project_id = envelope.project_id
+        payload = envelope.payload or {}
+        target_id = payload.get("target_id", "unknown")
+        target_url = payload.get("target_url", "unknown")
 
         # Count recent heartbeat failures
         failure_count_result = await session.execute(
@@ -667,7 +674,61 @@ class PipelineOrchestrator:
                 "pipeline_heartbeat_pattern",
                 project_id=str(project_id),
                 failures_this_hour=failure_count,
+                target_id=target_id,
             )
+
+            # Generate a deterministic fingerprint for this heartbeat target
+            import hashlib
+            fingerprint_input = f"heartbeat:{project_id}:{target_id}"
+            fingerprint = hashlib.sha256(fingerprint_input.encode()).hexdigest()[:16]
+
+            # Check if an open incident already exists for this fingerprint
+            existing_incident = await session.execute(
+                select(Incident).where(
+                    Incident.project_id == project_id,
+                    Incident.fingerprint == fingerprint,
+                    Incident.status.notin_([IncidentStatus.RESOLVED, IncidentStatus.REMEDIATION_FAILED]),
+                )
+            )
+            existing = existing_incident.scalar_one_or_none()
+
+            if existing:
+                # Update existing incident with new failure evidence
+                existing.summary = (
+                    f"Heartbeat failure pattern: {failure_count} failures this hour. "
+                    f"Target: {target_url}"
+                )
+                existing.updated_at = datetime.now(timezone.utc)
+                result.incident = existing
+                result.actions_taken.append("heartbeat_incident_updated")
+                logger.warning(
+                    "pipeline_heartbeat_incident_updated",
+                    incident_id=str(existing.id),
+                    failures_this_hour=failure_count,
+                )
+            else:
+                # Create a new incident from heartbeat failure pattern
+                severity = "high" if failure_count >= 5 else "medium"
+                incident_data = IncidentCreate(
+                    project_id=project_id,
+                    severity=severity,
+                    title=f"Heartbeat failure: {target_url}",
+                    summary=f"Heartbeat failure pattern: {failure_count} failures this hour. Target: {target_url}",
+                    affected_service=envelope.source,
+                    affected_component=target_url,
+                    fingerprint=fingerprint,
+                    correlation_id=envelope.correlation_id,
+                )
+                incident = await incident_engine.create_incident(incident_data, session)
+                result.incident = incident
+                result.actions_taken.append("heartbeat_incident_created")
+                logger.warning(
+                    "pipeline_heartbeat_incident_created",
+                    incident_id=str(incident.id),
+                    severity=severity,
+                    fingerprint=fingerprint,
+                    failures_this_hour=failure_count,
+                )
 
     async def _audit_pipeline_run(
         self,
