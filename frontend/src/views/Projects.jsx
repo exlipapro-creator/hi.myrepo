@@ -9,77 +9,536 @@ function authHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+const AUTONOMY_LEVELS = [
+  { value: 0, label: 'OBSERVE', desc: 'Watch only — no actions taken' },
+  { value: 1, label: 'RECOMMEND', desc: 'Suggest actions, require approval' },
+  { value: 2, label: 'AUTOPILOT', desc: 'Execute approved runbooks automatically' },
+]
+
+const ENVIRONMENTS = ['production', 'staging', 'development']
+
+function CreateProjectForm({ onCreated, onCancel }) {
+  const [form, setForm] = useState({
+    name: '',
+    slug: '',
+    description: '',
+    repository_url: '',
+    environment: 'production',
+  })
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  function updateField(key, value) {
+    setForm(prev => {
+      const next = { ...prev, [key]: value }
+      // Auto-generate slug from name
+      if (key === 'name' && !prev.slugManuallyEdited) {
+        next.slug = value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+      }
+      return next
+    })
+  }
+
+  function handleSlugChange(value) {
+    setForm(prev => ({ ...prev, slug: value, slugManuallyEdited: true }))
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setError('')
+    if (!form.name.trim() || !form.slug.trim()) {
+      setError('Name and slug are required')
+      return
+    }
+    setLoading(true)
+    try {
+      const res = await fetch(`${API}/projects`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: form.name.trim(),
+          slug: form.slug.trim(),
+          description: form.description.trim() || null,
+          repository_url: form.repository_url.trim() || null,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.detail || 'Failed to create project')
+        return
+      }
+      onCreated(data)
+    } catch (err) {
+      setError('Connection failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const inputStyle = {
+    width: '100%', background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)',
+    borderRadius: 'var(--radius-sm)', padding: '8px 12px', color: 'var(--text-primary)',
+    fontSize: '13px', outline: 'none', fontFamily: 'inherit',
+  }
+
+  const labelStyle = {
+    display: 'block', fontSize: '12px', color: 'var(--text-muted)',
+    marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em',
+  }
+
+  return (
+    <div className="card" style={{ maxWidth: '600px' }}>
+      <div className="card-header">
+        <span className="card-title">CREATE PROJECT</span>
+      </div>
+      {error && (
+        <div style={{
+          padding: '8px 12px', borderRadius: 'var(--radius-sm)',
+          background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)',
+          color: 'var(--accent-red)', fontSize: '13px', marginBottom: 'var(--space-md)',
+        }}>
+          {error}
+        </div>
+      )}
+      <form onSubmit={handleSubmit}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-md)' }}>
+          <div>
+            <label style={labelStyle}>Project Name *</label>
+            <input
+              type="text" required value={form.name}
+              onChange={e => updateField('name', e.target.value)}
+              placeholder="My SaaS"
+              style={inputStyle}
+            />
+          </div>
+          <div>
+            <label style={labelStyle}>Slug *</label>
+            <input
+              type="text" required value={form.slug}
+              onChange={e => handleSlugChange(e.target.value)}
+              placeholder="my-saas"
+              style={{ ...inputStyle, fontFamily: 'var(--font-mono)' }}
+            />
+          </div>
+        </div>
+        <div style={{ marginTop: 'var(--space-md)' }}>
+          <label style={labelStyle}>Description</label>
+          <input
+            type="text" value={form.description}
+            onChange={e => updateField('description', e.target.value)}
+            placeholder="What does this project do?"
+            style={inputStyle}
+          />
+        </div>
+        <div style={{ marginTop: 'var(--space-md)' }}>
+          <label style={labelStyle}>Repository URL</label>
+          <input
+            type="url" value={form.repository_url}
+            onChange={e => updateField('repository_url', e.target.value)}
+            placeholder="https://github.com/org/repo"
+            style={inputStyle}
+          />
+        </div>
+        <div style={{ marginTop: 'var(--space-md)' }}>
+          <label style={labelStyle}>Initial Environment</label>
+          <select
+            value={form.environment}
+            onChange={e => updateField('environment', e.target.value)}
+            style={{ ...inputStyle, cursor: 'pointer' }}
+          >
+            {ENVIRONMENTS.map(env => (
+              <option key={env} value={env}>{env}</option>
+            ))}
+          </select>
+        </div>
+        <div style={{ marginTop: 'var(--space-lg)', display: 'flex', gap: 'var(--space-sm)' }}>
+          <button type="submit" disabled={loading} className="btn btn-primary" style={{ flex: 1 }}>
+            {loading ? 'Creating...' : 'Create Project'}
+          </button>
+          <button type="button" onClick={onCancel} className="btn" style={{ color: 'var(--text-muted)' }}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function ProjectCard({ project, health, onClick }) {
+  const healthColor = {
+    healthy: 'var(--accent-green)',
+    degraded: 'var(--accent-yellow)',
+    unhealthy: 'var(--accent-red)',
+    unknown: 'var(--text-muted)',
+  }[health?.health || 'unknown']
+
+  return (
+    <div
+      className="card"
+      onClick={() => onClick(project)}
+      style={{ cursor: 'pointer', transition: 'border-color 0.15s' }}
+      onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent-blue)'}
+      onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border-primary)'}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '4px' }}>{project.name}</h3>
+          <span className="mono" style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{project.slug}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{
+            width: '8px', height: '8px', borderRadius: '50%',
+            background: healthColor, display: 'inline-block',
+          }} />
+          <span className="mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+            {health ? health.health.toUpperCase() : 'LOADING'}
+          </span>
+        </div>
+      </div>
+      {project.description && (
+        <p style={{ marginTop: 'var(--space-sm)', color: 'var(--text-secondary)', fontSize: '13px' }}>
+          {project.description}
+        </p>
+      )}
+      {health && (
+        <div style={{
+          marginTop: 'var(--space-md)', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
+          gap: 'var(--space-sm)', padding: 'var(--space-sm)',
+          background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)',
+        }}>
+          <div style={{ textAlign: 'center' }}>
+            <div className="metric-label">Events</div>
+            <div className="mono" style={{ fontSize: '14px', fontWeight: 600 }}>{health.total_events}</div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div className="metric-label">Incidents</div>
+            <div className="mono" style={{
+              fontSize: '14px', fontWeight: 600,
+              color: health.active_incidents > 0 ? 'var(--accent-orange)' : 'var(--text-primary)',
+            }}>{health.active_incidents}</div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div className="metric-label">Deploys</div>
+            <div className="mono" style={{ fontSize: '14px', fontWeight: 600 }}>{health.total_deployments}</div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div className="metric-label">Error Rate</div>
+            <div className="mono" style={{
+              fontSize: '14px', fontWeight: 600,
+              color: health.recent_error_rate > 0.1 ? 'var(--accent-red)' : 'var(--text-primary)',
+            }}>{(health.recent_error_rate * 100).toFixed(1)}%</div>
+          </div>
+        </div>
+      )}
+      <div style={{ marginTop: 'var(--space-sm)', display: 'flex', gap: 'var(--space-md)' }}>
+        <div>
+          <div className="metric-label">Autonomy</div>
+          <div className="mono" style={{ fontSize: '12px' }}>
+            {AUTONOMY_LEVELS[project.autonomy_level]?.label || `Level ${project.autonomy_level}`}
+          </div>
+        </div>
+        {project.repository_url && (
+          <div>
+            <div className="metric-label">Repository</div>
+            <span className="mono" style={{ fontSize: '12px', color: 'var(--accent-blue)' }}>
+              {project.repository_url.replace('https://github.com/', '').replace(/\/$/, '')}
+            </span>
+          </div>
+        )}
+        <div>
+          <div className="metric-label">Created</div>
+          <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+            {project.created_at ? formatDistanceToNow(new Date(project.created_at), { addSuffix: true }) : '—'}
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ProjectDetail({ project, health, onBack }) {
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <button
+            onClick={onBack}
+            style={{
+              background: 'none', border: 'none', color: 'var(--accent-blue)',
+              cursor: 'pointer', fontSize: '12px', padding: 0, marginBottom: '4px',
+            }}
+          >
+            ← Back to Projects
+          </button>
+          <h1>
+            {project.name}
+            <span className="mono" style={{ color: 'var(--text-muted)', fontSize: '14px', marginLeft: 'var(--space-sm)' }}>
+              {project.slug}
+            </span>
+          </h1>
+        </div>
+        <span className={`status-badge ${project.is_active ? 'healthy' : 'unhealthy'}`}>
+          <span className={`status-dot ${project.is_active ? 'healthy' : 'unhealthy'}`}></span>
+          {project.is_active ? 'ACTIVE' : 'INACTIVE'}
+        </span>
+      </div>
+
+      {project.description && (
+        <div className="card" style={{ marginBottom: 'var(--space-md)' }}>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>{project.description}</p>
+        </div>
+      )}
+
+      {/* Health Overview */}
+      <div className="bento-grid" style={{ marginBottom: 'var(--space-md)' }}>
+        <div className="card">
+          <div className="card-title">Health</div>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px',
+          }}>
+            <span style={{
+              width: '12px', height: '12px', borderRadius: '50%',
+              background: {
+                healthy: 'var(--accent-green)',
+                degraded: 'var(--accent-yellow)',
+                unhealthy: 'var(--accent-red)',
+              }[health?.health] || 'var(--text-muted)',
+            }} />
+            <span style={{ fontSize: '16px', fontWeight: 600, textTransform: 'uppercase' }}>
+              {health?.health || 'unknown'}
+            </span>
+          </div>
+        </div>
+        <div className="card">
+          <div className="card-title">Events</div>
+          <div className="metric-value">{health?.total_events || 0}</div>
+        </div>
+        <div className="card">
+          <div className="card-title">Active Incidents</div>
+          <div className="metric-value" style={{
+            color: (health?.active_incidents || 0) > 0 ? 'var(--accent-orange)' : 'var(--text-primary)',
+          }}>
+            {health?.active_incidents || 0}
+          </div>
+        </div>
+        <div className="card">
+          <div className="card-title">Error Rate</div>
+          <div className="metric-value" style={{
+            color: (health?.recent_error_rate || 0) > 0.1 ? 'var(--accent-red)' : 'var(--text-primary)',
+          }}>
+            {health ? `${(health.recent_error_rate * 100).toFixed(1)}%` : '—'}
+          </div>
+        </div>
+      </div>
+
+      {/* Configuration */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-md)' }}>
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">CONFIGURATION</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span className="metric-label">Autonomy Level</span>
+              <span className="mono" style={{ fontSize: '13px' }}>
+                {AUTONOMY_LEVELS[project.autonomy_level]?.label || `Level ${project.autonomy_level}`}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span className="metric-label">Organization</span>
+              <span className="mono" style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                {project.organization_id.slice(0, 8)}…
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span className="metric-label">Created</span>
+              <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                {project.created_at ? new Date(project.created_at).toLocaleString() : '—'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span className="metric-label">Updated</span>
+              <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                {project.updated_at ? new Date(project.updated_at).toLocaleString() : '—'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">DEPENDENCIES</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
+            {health ? (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span className="metric-label">Healthy Dependencies</span>
+                  <span className="mono" style={{ fontSize: '13px', color: 'var(--accent-green)' }}>
+                    {health.healthy_dependencies}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span className="metric-label">Unhealthy Dependencies</span>
+                  <span className="mono" style={{
+                    fontSize: '13px',
+                    color: health.unhealthy_dependencies > 0 ? 'var(--accent-red)' : 'var(--text-muted)',
+                  }}>
+                    {health.unhealthy_dependencies}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span className="metric-label">Deployments</span>
+                  <span className="mono" style={{ fontSize: '13px' }}>
+                    {health.total_deployments}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 'var(--space-md)' }}>
+                Loading health data...
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Repository */}
+      {project.repository_url && (
+        <div className="card" style={{ marginTop: 'var(--space-md)' }}>
+          <div className="card-header">
+            <span className="card-title">REPOSITORY</span>
+          </div>
+          <a
+            href={project.repository_url}
+            target="_blank"
+            rel="noopener"
+            style={{ color: 'var(--accent-blue)', fontSize: '14px', textDecoration: 'none' }}
+          >
+            {project.repository_url}
+          </a>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Projects() {
   const [projects, setProjects] = useState([])
+  const [healthMap, setHealthMap] = useState({})
   const [loading, setLoading] = useState(true)
+  const [showCreate, setShowCreate] = useState(false)
+  const [selectedProject, setSelectedProject] = useState(null)
+  const [selectedHealth, setSelectedHealth] = useState(null)
 
   useEffect(() => { loadProjects() }, [])
 
   async function loadProjects() {
+    setLoading(true)
     try {
       const res = await fetch(`${API}/projects`, { headers: authHeaders() })
-      if (res.ok) setProjects(await res.json())
+      if (res.ok) {
+        const projs = await res.json()
+        setProjects(projs)
+
+        // Load health for each project
+        const healthPromises = projs.map(async (p) => {
+          try {
+            const hRes = await fetch(`${API}/projects/${p.id}/health`, { headers: authHeaders() })
+            if (hRes.ok) return { id: p.id, health: await hRes.json() }
+          } catch {}
+          return { id: p.id, health: null }
+        })
+        const results = await Promise.all(healthPromises)
+        const map = {}
+        results.forEach(r => { map[r.id] = r.health })
+        setHealthMap(map)
+      }
     } catch (e) { console.error(e) }
     finally { setLoading(false) }
+  }
+
+  function handleCreated(project) {
+    setProjects(prev => [project, ...prev])
+    setShowCreate(false)
+    // Load health for new project
+    fetch(`${API}/projects/${project.id}/health`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then(h => { if (h) setHealthMap(prev => ({ ...prev, [project.id]: h })) })
+      .catch(() => {})
+  }
+
+  function handleSelectProject(project) {
+    setSelectedProject(project)
+    setSelectedHealth(healthMap[project.id] || null)
+    // Fetch fresh health
+    fetch(`${API}/projects/${project.id}/health`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then(h => { if (h) setSelectedHealth(h) })
+      .catch(() => {})
+  }
+
+  // Project detail view
+  if (selectedProject) {
+    return (
+      <ProjectDetail
+        project={selectedProject}
+        health={selectedHealth}
+        onBack={() => { setSelectedProject(null); setSelectedHealth(null) }}
+      />
+    )
   }
 
   return (
     <div>
       <div className="page-header">
         <h1>📦 Projects</h1>
+        <button
+          className="btn btn-primary"
+          onClick={() => setShowCreate(!showCreate)}
+        >
+          {showCreate ? '✕ Cancel' : '+ Create Project'}
+        </button>
       </div>
 
-      <div className="bento-grid">
-        {loading ? (
-          <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>Loading...</div>
-        ) : projects.length === 0 ? (
-          <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)', gridColumn: '1 / -1' }}>
-            No projects yet. Create one via the API to start monitoring.
-          </div>
-        ) : (
-          projects.map(p => (
-            <div key={p.id} className="card">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '4px' }}>{p.name}</h3>
-                  <span className="mono" style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{p.slug}</span>
-                </div>
-                <span className="status-badge healthy">
-                  <span className="status-dot healthy"></span>
-                  {p.is_active ? 'ACTIVE' : 'INACTIVE'}
-                </span>
-              </div>
-              {p.description && (
-                <p style={{ marginTop: 'var(--space-sm)', color: 'var(--text-secondary)', fontSize: '13px' }}>
-                  {p.description}
-                </p>
-              )}
-              <div style={{ marginTop: 'var(--space-md)', display: 'flex', gap: 'var(--space-md)' }}>
-                <div>
-                  <div className="metric-label">Autonomy</div>
-                  <div className="mono" style={{ fontSize: '13px' }}>Level {p.autonomy_level}</div>
-                </div>
-                {p.repository_url && (
-                  <div>
-                    <div className="metric-label">Repository</div>
-                    <a href={p.repository_url} target="_blank" rel="noopener" style={{
-                      color: 'var(--accent-blue)', fontSize: '13px', textDecoration: 'none',
-                    }}>
-                      {p.repository_url.replace('https://github.com/', '')}
-                    </a>
-                  </div>
-                )}
-                <div>
-                  <div className="metric-label">Created</div>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
-                    {p.created_at ? formatDistanceToNow(new Date(p.created_at), { addSuffix: true }) : '—'}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
+      {showCreate && (
+        <div style={{ marginBottom: 'var(--space-lg)' }}>
+          <CreateProjectForm
+            onCreated={handleCreated}
+            onCancel={() => setShowCreate(false)}
+          />
+        </div>
+      )}
+
+      {loading ? (
+        <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 'var(--space-lg)' }}>
+          Loading projects...
+        </div>
+      ) : projects.length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', padding: 'var(--space-xl)' }}>
+          <div style={{ fontSize: '32px', marginBottom: 'var(--space-md)' }}>📦</div>
+          <h2 style={{ fontSize: '18px', fontWeight: 600, marginBottom: 'var(--space-sm)' }}>
+            No projects yet
+          </h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: 'var(--space-lg)' }}>
+            Create your first project to begin observing your systems.
+          </p>
+          <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
+            + Create Your First Project
+          </button>
+        </div>
+      ) : (
+        <div className="bento-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
+          {projects.map(p => (
+            <ProjectCard
+              key={p.id}
+              project={p}
+              health={healthMap[p.id]}
+              onClick={handleSelectProject}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

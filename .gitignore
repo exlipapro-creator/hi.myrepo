@@ -88,3 +88,6 @@ temp/
 **/*.pem
 **/*.key
 **/*.cert
+
+# Vercel
+.vercel

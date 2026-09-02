@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Activity, AlertTriangle, CheckCircle, Clock, Zap } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { apiUrl } from '../utils/api.js'
@@ -6,9 +7,12 @@ import { apiUrl } from '../utils/api.js'
 const API = apiUrl('/api/v1')
 
 export default function Dashboard() {
+  const navigate = useNavigate()
   const [projects, setProjects] = useState([])
   const [incidents, setIncidents] = useState([])
   const [events, setEvents] = useState([])
+  const [providers, setProviders] = useState([])
+  const [runbooks, setRunbooks] = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -17,10 +21,12 @@ export default function Dashboard() {
 
   async function loadData() {
     try {
-      const [projRes, incRes, evRes] = await Promise.allSettled([
+      const [projRes, incRes, evRes, provRes, rbRes] = await Promise.allSettled([
         fetch(`${API}/projects`, { headers: authHeaders() }),
         fetch(`${API}/incidents?limit=10`, { headers: authHeaders() }),
         fetch(`${API}/events?limit=20`, { headers: authHeaders() }),
+        fetch(apiUrl('/v1/providers'), { headers: authHeaders() }),
+        fetch(`${API}/runbooks`, { headers: authHeaders() }),
       ])
 
       if (projRes.status === 'fulfilled' && projRes.value.ok) {
@@ -32,6 +38,12 @@ export default function Dashboard() {
       if (evRes.status === 'fulfilled' && evRes.value.ok) {
         const data = await evRes.value.json()
         setEvents(data.events || [])
+      }
+      if (provRes.status === 'fulfilled' && provRes.value.ok) {
+        setProviders(await provRes.value.json())
+      }
+      if (rbRes.status === 'fulfilled' && rbRes.value.ok) {
+        setRunbooks(await rbRes.value.json())
       }
     } catch (e) {
       console.error('Failed to load dashboard:', e)
@@ -47,7 +59,100 @@ export default function Dashboard() {
 
   const activeIncidents = Array.isArray(incidents) ? incidents.filter(i => i.status !== 'RESOLVED') : []
   const criticalCount = activeIncidents.filter(i => i.severity === 'critical').length
+  const healthyProviders = providers.filter(p => p.status === 'healthy').length
 
+  // ── Bootstrap: Empty state for new organizations ──────────────────
+  if (!loading && projects.length === 0) {
+    return (
+      <div>
+        <div className="page-header">
+          <h1>hi.myrepo // COMMAND CENTER</h1>
+          <span className="mono" style={{ color: 'var(--text-muted)' }}>
+            {new Date().toLocaleTimeString()}
+          </span>
+        </div>
+
+        {/* Welcome Banner */}
+        <div className="card" style={{
+          marginBottom: 'var(--space-lg)',
+          background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0, rgba(139, 92, 246, 0.08) 100%)',
+          border: '1px solid rgba(59, 130, 246, 0.2)',
+        }}>
+          <div style={{ textAlign: 'center', padding: 'var(--space-lg)' }}>
+            <div style={{ fontSize: '32px', marginBottom: 'var(--space-md)' }}>🎯</div>
+            <h2 style={{ fontSize: '20px', fontWeight: 700, marginBottom: 'var(--space-sm)' }}>
+              Welcome to hi.myrepo
+            </h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '14px', maxWidth: '500px', margin: '0 auto var(--space-lg)' }}>
+              Your control plane is ready. Connect your first system to begin observing,
+              understanding, and responding to incidents with AI-augmented intelligence.
+            </p>
+            <div style={{ display: 'flex', gap: 'var(--space-sm)', justifyContent: 'center' }}>
+              <button
+                className="btn btn-primary"
+                onClick={() => navigate('/projects')}
+                style={{ fontSize: '14px' }}
+              >
+                + Create Your First Project
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* System Overview */}
+        <div className="bento-grid" style={{ marginBottom: 'var(--space-md)' }}>
+          <div className="card" style={{ textAlign: 'center' }}>
+            <div className="card-title">Projects</div>
+            <div className="metric-value">0</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Create one to start</div>
+          </div>
+          <div className="card" style={{ textAlign: 'center' }}>
+            <div className="card-title">Events</div>
+            <div className="metric-value">{events.length}</div>
+          </div>
+          <div className="card" style={{ textAlign: 'center' }}>
+            <div className="card-title">Incidents</div>
+            <div className="metric-value">{activeIncidents.length}</div>
+          </div>
+          <div className="card" style={{ textAlign: 'center' }}>
+            <div className="card-title">AI Providers</div>
+            <div className="metric-value" style={{ color: healthyProviders > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>
+              {healthyProviders}
+              <span style={{ fontSize: '12px', fontWeight: 400 }}> healthy</span>
+            </div>
+          </div>
+          <div className="card" style={{ textAlign: 'center' }}>
+            <div className="card-title">Runbooks</div>
+            <div className="metric-value">{runbooks.length}</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>available</div>
+          </div>
+        </div>
+
+        {/* How it works */}
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">HOW IT WORKS</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-md)', padding: 'var(--space-sm)' }}>
+            {[
+              { icon: '📡', title: 'Observe', desc: 'Ingest events, heartbeats, and telemetry from your systems' },
+              { icon: '🤖', title: 'Understand', desc: 'AI analyzes patterns, correlates events, and identifies root causes' },
+              { icon: '📋', title: 'Act', desc: 'Propose and approve runbook executions for remediation' },
+              { icon: '🔄', title: 'Autonomy', desc: 'Progressively grant the system more authority as trust builds' },
+            ].map((step, i) => (
+              <div key={i} style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '24px', marginBottom: 'var(--space-sm)' }}>{step.icon}</div>
+                <div style={{ fontWeight: 600, fontSize: '14px', marginBottom: '4px' }}>{step.title}</div>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{step.desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Normal dashboard with data ────────────────────────────────────
   return (
     <div>
       <div className="page-header">
@@ -87,26 +192,37 @@ export default function Dashboard() {
         <div className="card">
           <div className="card-header">
             <span className="card-title">PROJECTS</span>
+            <button
+              className="btn"
+              onClick={() => navigate('/projects')}
+              style={{ fontSize: '11px', padding: '2px 8px', color: 'var(--accent-blue)' }}
+            >
+              View All →
+            </button>
           </div>
           {projects.length === 0 ? (
             <div style={{ color: 'var(--text-muted)', padding: 'var(--space-md)', textAlign: 'center' }}>
-              {loading ? 'Loading...' : 'No projects yet. Create one to get started.'}
+              {loading ? 'Loading...' : 'No projects yet'}
             </div>
           ) : (
             <div className="bento-grid" style={{ gridTemplateColumns: '1fr' }}>
-              {projects.map(p => (
-                <div key={p.id} style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: 'var(--space-sm)', borderRadius: 'var(--radius-sm)',
-                  background: 'var(--bg-secondary)',
-                }}>
+              {projects.slice(0, 5).map(p => (
+                <div
+                  key={p.id}
+                  onClick={() => navigate('/projects')}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: 'var(--space-sm)', borderRadius: 'var(--radius-sm)',
+                    background: 'var(--bg-secondary)', cursor: 'pointer',
+                  }}
+                >
                   <div>
                     <div style={{ fontWeight: 600, fontSize: '13px' }}>{p.name}</div>
                     <div className="mono" style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{p.slug}</div>
                   </div>
                   <span className="status-badge healthy">
                     <span className="status-dot healthy"></span>
-                    HEALTHY
+                    {p.is_active ? 'ACTIVE' : 'INACTIVE'}
                   </span>
                 </div>
               ))}
@@ -144,6 +260,13 @@ export default function Dashboard() {
         <div className="card" style={{ marginTop: 'var(--space-md)' }}>
           <div className="card-header">
             <span className="card-title">ACTIVE INCIDENTS</span>
+            <button
+              className="btn"
+              onClick={() => navigate('/incidents')}
+              style={{ fontSize: '11px', padding: '2px 8px', color: 'var(--accent-blue)' }}
+            >
+              View All →
+            </button>
           </div>
           <table>
             <thead>
@@ -158,7 +281,7 @@ export default function Dashboard() {
             </thead>
             <tbody>
               {activeIncidents.map(inc => (
-                <tr key={inc.id}>
+                <tr key={inc.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/incidents/${inc.id}`)}>
                   <td><span className={`severity-badge ${inc.severity}`}>{inc.severity}</span></td>
                   <td className="mono" style={{ fontSize: '12px' }}>{inc.status}</td>
                   <td>{inc.title || inc.fingerprint || 'Unknown'}</td>
