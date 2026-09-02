@@ -72,7 +72,21 @@ async def lifespan(app: FastAPI):
             documented_at="docs/audits/production-readiness.md",
         )
 
+    # Start heartbeat worker
+    from app.worker.heartbeat import heartbeat_worker
+    try:
+        await heartbeat_worker.start()
+    except Exception as e:
+        logger.warning("heartbeat_worker_start_failed", error=str(e))
+
     yield
+
+    # Shutdown: stop heartbeat worker
+    try:
+        await heartbeat_worker.stop()
+    except Exception:
+        pass
+
     # Shutdown: close connections
     await db_manager.close()
     logger.info("hi.myrepo shutting down")

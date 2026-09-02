@@ -51,6 +51,9 @@ class ProjectResponse(BaseModel):
     organization_id: str
     is_active: bool
     autonomy_level: int
+    monitoring_status: str
+    monitoring_started_at: str | None
+    monitoring_stopped_at: str | None
     created_at: str
     updated_at: str
 
@@ -113,6 +116,9 @@ async def create_project(
             organization_id=str(project.organization_id),
             is_active=project.is_active,
             autonomy_level=project.autonomy_level,
+            monitoring_status=project.monitoring_status,
+            monitoring_started_at=project.monitoring_started_at.isoformat() if project.monitoring_started_at else None,
+            monitoring_stopped_at=project.monitoring_stopped_at.isoformat() if project.monitoring_stopped_at else None,
             created_at=project.created_at.isoformat(),
             updated_at=project.updated_at.isoformat(),
         )
@@ -141,6 +147,9 @@ async def list_projects(
                 organization_id=str(p.organization_id),
                 is_active=p.is_active,
                 autonomy_level=p.autonomy_level,
+                monitoring_status=p.monitoring_status,
+                monitoring_started_at=p.monitoring_started_at.isoformat() if p.monitoring_started_at else None,
+                monitoring_stopped_at=p.monitoring_stopped_at.isoformat() if p.monitoring_stopped_at else None,
                 created_at=p.created_at.isoformat(),
                 updated_at=p.updated_at.isoformat(),
             )
@@ -171,6 +180,9 @@ async def get_project(
             organization_id=str(project.organization_id),
             is_active=project.is_active,
             autonomy_level=project.autonomy_level,
+            monitoring_status=project.monitoring_status,
+            monitoring_started_at=project.monitoring_started_at.isoformat() if project.monitoring_started_at else None,
+            monitoring_stopped_at=project.monitoring_stopped_at.isoformat() if project.monitoring_stopped_at else None,
             created_at=project.created_at.isoformat(),
             updated_at=project.updated_at.isoformat(),
         )
@@ -214,9 +226,117 @@ async def update_project(
             organization_id=str(project.organization_id),
             is_active=project.is_active,
             autonomy_level=project.autonomy_level,
+            monitoring_status=project.monitoring_status,
+            monitoring_started_at=project.monitoring_started_at.isoformat() if project.monitoring_started_at else None,
+            monitoring_stopped_at=project.monitoring_stopped_at.isoformat() if project.monitoring_stopped_at else None,
             created_at=project.created_at.isoformat(),
             updated_at=project.updated_at.isoformat(),
         )
+
+
+@router.post("/{project_id}/monitoring/start")
+async def start_monitoring(
+    project_id: uuid.UUID,
+    user: TokenData = Depends(require_project_access),
+):
+    """Start monitoring a project. Idempotent."""
+    async with db_manager.get_session() as session:
+        result = await session.execute(
+            select(Project).where(Project.id == project_id)
+        )
+        project = result.scalar_one_or_none()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        now = datetime.now(timezone.utc)
+
+        # Idempotent: if already active, return current state
+        if project.monitoring_status == "active":
+            return {
+                "status": "active",
+                "message": "Monitoring already active",
+                "started_at": project.monitoring_started_at.isoformat() if project.monitoring_started_at else None,
+            }
+
+        project.monitoring_status = "active"
+        project.monitoring_started_at = now
+        project.monitoring_stopped_at = None
+        project.updated_at = now
+
+        # Audit log
+        from app.database.models import AuditLog
+        audit = AuditLog(
+            id=uuid.uuid4(),
+            action="monitoring.started",
+            actor_type="user",
+            actor_id=user.user_id,
+            resource_type="project",
+            resource_id=str(project.id),
+            project_id=project.id,
+            details={"monitoring_status": "active"},
+            outcome="success",
+        )
+        session.add(audit)
+
+        await session.flush()
+
+        return {
+            "status": "active",
+            "message": "Monitoring started",
+            "started_at": now.isoformat(),
+        }
+
+
+@router.post("/{project_id}/monitoring/stop")
+async def stop_monitoring(
+    project_id: uuid.UUID,
+    user: TokenData = Depends(require_project_access),
+):
+    """Stop monitoring a project. Idempotent. Preserves all historical data."""
+    async with db_manager.get_session() as session:
+        result = await session.execute(
+            select(Project).where(Project.id == project_id)
+        )
+        project = result.scalar_one_or_none()
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        now = datetime.now(timezone.utc)
+
+        # Idempotent: if already stopped, return current state
+        if project.monitoring_status == "stopped":
+            return {
+                "status": "stopped",
+                "message": "Monitoring already stopped",
+                "stopped_at": project.monitoring_stopped_at.isoformat() if project.monitoring_stopped_at else None,
+            }
+
+        project.monitoring_status = "stopped"
+        project.monitoring_stopped_at = now
+        project.updated_at = now
+
+        # Audit log
+        from app.database.models import AuditLog
+        audit = AuditLog(
+            id=uuid.uuid4(),
+            action="monitoring.stopped",
+            actor_type="user",
+            actor_id=user.user_id,
+            resource_type="project",
+            resource_id=str(project.id),
+            project_id=project.id,
+            details={"monitoring_status": "stopped"},
+            outcome="success",
+        )
+        session.add(audit)
+
+        await session.flush()
+
+        return {
+            "status": "stopped",
+            "message": "Monitoring stopped. Historical data preserved.",
+            "stopped_at": now.isoformat(),
+        }
 
 
 @router.get("/{project_id}/health", response_model=ProjectHealthResponse)

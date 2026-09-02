@@ -204,6 +204,9 @@ class Project(Base):
     organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     autonomy_level: Mapped[int] = mapped_column(Integer, default=AutonomyLevel.OBSERVE)
+    monitoring_status: Mapped[str] = mapped_column(String(20), default="stopped")  # stopped, active
+    monitoring_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    monitoring_stopped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 

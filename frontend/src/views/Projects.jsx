@@ -172,6 +172,8 @@ function ProjectCard({ project, health, onClick }) {
     unknown: 'var(--text-muted)',
   }[health?.health || 'unknown']
 
+  const isMonitoring = project.monitoring_status === 'active'
+
   return (
     <div
       className="card"
@@ -185,14 +187,24 @@ function ProjectCard({ project, health, onClick }) {
           <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '4px' }}>{project.name}</h3>
           <span className="mono" style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{project.slug}</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{
-            width: '8px', height: '8px', borderRadius: '50%',
-            background: healthColor, display: 'inline-block',
-          }} />
-          <span className="mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-            {health ? health.health.toUpperCase() : 'LOADING'}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+          <span className="mono" style={{
+            fontSize: '10px', padding: '2px 6px', borderRadius: '4px',
+            background: isMonitoring ? 'rgba(34, 197, 94, 0.1)' : 'rgba(107, 114, 128, 0.1)',
+            color: isMonitoring ? 'var(--accent-green)' : 'var(--text-muted)',
+            border: `1px solid ${isMonitoring ? 'rgba(34, 197, 94, 0.3)' : 'rgba(107, 114, 128, 0.2)'}`,
+          }}>
+            {isMonitoring ? '◉ MONITORING' : '○ STOPPED'}
           </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{
+              width: '8px', height: '8px', borderRadius: '50%',
+              background: healthColor, display: 'inline-block',
+            }} />
+            <span className="mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              {health ? health.health.toUpperCase() : 'LOADING'}
+            </span>
+          </div>
         </div>
       </div>
       {project.description && (
@@ -256,7 +268,31 @@ function ProjectCard({ project, health, onClick }) {
   )
 }
 
-function ProjectDetail({ project, health, onBack }) {
+function ProjectDetail({ project, health, onBack, onMonitoringChange }) {
+  const [monitoringLoading, setMonitoringLoading] = useState(false)
+  const isMonitoring = project.monitoring_status === 'active'
+
+  async function handleToggleMonitoring() {
+    setMonitoringLoading(true)
+    try {
+      const action = isMonitoring ? 'stop' : 'start'
+      const res = await fetch(`${API}/projects/${project.id}/monitoring/${action}`, {
+        method: 'POST',
+        headers: authHeaders(),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        onMonitoringChange({
+          ...project,
+          monitoring_status: data.status,
+          monitoring_started_at: data.started_at || project.monitoring_started_at,
+          monitoring_stopped_at: data.stopped_at || project.monitoring_stopped_at,
+        })
+      }
+    } catch (e) { console.error(e) }
+    finally { setMonitoringLoading(false) }
+  }
+
   return (
     <div>
       <div className="page-header">
@@ -277,10 +313,29 @@ function ProjectDetail({ project, health, onBack }) {
             </span>
           </h1>
         </div>
-        <span className={`status-badge ${project.is_active ? 'healthy' : 'unhealthy'}`}>
-          <span className={`status-dot ${project.is_active ? 'healthy' : 'unhealthy'}`}></span>
-          {project.is_active ? 'ACTIVE' : 'INACTIVE'}
-        </span>
+        <div style={{ display: 'flex', gap: 'var(--space-sm)', alignItems: 'center' }}>
+          <button
+            className="btn"
+            onClick={handleToggleMonitoring}
+            disabled={monitoringLoading}
+            style={{
+              fontSize: '12px', fontWeight: 600,
+              background: isMonitoring ? 'rgba(239, 68, 68, 0.1)' : 'rgba(34, 197, 94, 0.1)',
+              border: `1px solid ${isMonitoring ? 'rgba(239, 68, 68, 0.3)' : 'rgba(34, 197, 94, 0.3)'}`,
+              color: isMonitoring ? 'var(--accent-red)' : 'var(--accent-green)',
+            }}
+          >
+            {monitoringLoading ? '...' : isMonitoring ? '⏹ Stop Monitoring' : '▶ Start Monitoring'}
+          </button>
+          <span className="mono" style={{
+            fontSize: '11px', padding: '3px 8px', borderRadius: '4px',
+            background: isMonitoring ? 'rgba(34, 197, 94, 0.1)' : 'rgba(107, 114, 128, 0.1)',
+            color: isMonitoring ? 'var(--accent-green)' : 'var(--text-muted)',
+            border: `1px solid ${isMonitoring ? 'rgba(34, 197, 94, 0.3)' : 'rgba(107, 114, 128, 0.2)'}`,
+          }}>
+            {isMonitoring ? '◉ MONITORING ACTIVE' : '○ MONITORING STOPPED'}
+          </span>
+        </div>
       </div>
 
       {project.description && (
@@ -478,6 +533,11 @@ export default function Projects() {
       .catch(() => {})
   }
 
+  function handleMonitoringChange(updatedProject) {
+    setSelectedProject(updatedProject)
+    setProjects(prev => prev.map(p => p.id === updatedProject.id ? updatedProject : p))
+  }
+
   // Project detail view
   if (selectedProject) {
     return (
@@ -485,6 +545,7 @@ export default function Projects() {
         project={selectedProject}
         health={selectedHealth}
         onBack={() => { setSelectedProject(null); setSelectedHealth(null) }}
+        onMonitoringChange={handleMonitoringChange}
       />
     )
   }
