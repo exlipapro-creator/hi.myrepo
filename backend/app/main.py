@@ -39,24 +39,46 @@ async def lifespan(app: FastAPI):
         debug=settings.app_debug,
     )
 
-    # Run database migrations at startup
+    # Ensure schema is current at startup (idempotent DDL)
     if settings.is_production:
         try:
-            from alembic.config import Config
-            from alembic import command
-            alembic_cfg = Config("alembic.ini")
-            alembic_cfg.set_main_option(
-                "script_location", str(Path(__file__).resolve().parent.parent / "alembic")
-            )
-            if settings.sync_database_url:
-                alembic_cfg.set_main_option(
-                    "sqlalchemy.url",
-                    settings.sync_database_url.replace("%", "%%"),
-                )
-            command.upgrade(alembic_cfg, "head")
-            logger.info("migrations_applied")
+            from sqlalchemy import text
+            async with db_manager.get_session() as session:
+                # Check and add monitoring columns if missing
+                check = await session.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='projects' AND column_name='monitoring_status'"
+                ))
+                if not check.scalar():
+                    await session.execute(text(
+                        "ALTER TABLE projects ADD COLUMN monitoring_status VARCHAR(20) NOT NULL DEFAULT 'stopped'"
+                    ))
+                    await session.execute(text(
+                        "ALTER TABLE projects ADD COLUMN monitoring_started_at TIMESTAMPTZ"
+                    ))
+                    await session.execute(text(
+                        "ALTER TABLE projects ADD COLUMN monitoring_stopped_at TIMESTAMPTZ"
+                    ))
+                    await session.execute(text(
+                        "CREATE INDEX IF NOT EXISTS idx_projects_monitoring_status ON projects(monitoring_status)"
+                    ))
+                    logger.info("migration_monitoring_columns_added")
+
+                # Check and add provider encryption columns if missing
+                check2 = await session.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='ai_providers' AND column_name='api_key_encrypted'"
+                ))
+                if not check2.scalar():
+                    await session.execute(text(
+                        "ALTER TABLE ai_providers ADD COLUMN api_key_encrypted TEXT"
+                    ))
+                    await session.execute(text(
+                        "ALTER TABLE ai_providers ADD COLUMN configured_at TIMESTAMPTZ"
+                    ))
+                    logger.info("migration_provider_encryption_added")
         except Exception as e:
-            logger.warning("migration_error", error=str(e))
+            logger.warning("schema_migration_error", error=str(e))
 
     # Startup: verify database connectivity
     healthy = await db_manager.health_check()
