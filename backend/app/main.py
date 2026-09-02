@@ -6,6 +6,7 @@ Event-driven architecture — the UI does not own system state.
 """
 
 import os
+import sys
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -36,6 +37,21 @@ async def lifespan(app: FastAPI):
         env=settings.app_env.value,
         debug=settings.app_debug,
     )
+
+    # Run database migrations at startup
+    try:
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode == 0:
+            logger.info("migrations_applied", output=result.stdout.strip()[-200:] if result.stdout else "ok")
+        else:
+            logger.warning("migration_warning", error=result.stderr.strip()[-200:] if result.stderr else "unknown")
+    except Exception as e:
+        logger.warning("migration_error", error=str(e))
+
     # Startup: verify database connectivity
     healthy = await db_manager.health_check()
     if healthy:
