@@ -135,11 +135,29 @@ async def login(req: LoginRequest):
 
 @router.get("/me", response_model=UserResponse)
 async def get_me(user: TokenData = Depends(get_current_user)):
-    """Get current authenticated user info."""
-    return UserResponse(
-        id=user.user_id,
-        email=user.email,
-        role=user.role,
-        autonomy_level=user.autonomy_level,
-        organization_id=user.organization_id,
-    )
+    """Get current authenticated user info.
+
+    Loads the full user profile from PostgreSQL rather than relying
+    on JWT claims, since the JWT intentionally omits profile fields
+    like full_name.
+    """
+    async with db_manager.get_session() as session:
+        result = await session.execute(
+            select(User).where(User.id == uuid.UUID(user.user_id))
+        )
+        db_user = result.scalar_one_or_none()
+
+        if db_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+
+        return UserResponse(
+            id=str(db_user.id),
+            email=db_user.email,
+            full_name=db_user.full_name,
+            role=db_user.role,
+            autonomy_level=db_user.autonomy_level,
+            organization_id=str(db_user.organization_id),
+        )
