@@ -252,7 +252,7 @@ async def delete_target(
     target_id: uuid.UUID,
     user: TokenData = Depends(get_current_user),
 ):
-    """Delete a monitored target."""
+    """Delete a monitored target and its heartbeat history."""
     async with db_manager.get_session() as session:
         result = await session.execute(
             select(MonitoredTarget).where(MonitoredTarget.id == target_id)
@@ -261,6 +261,20 @@ async def delete_target(
         if not target:
             raise HTTPException(status_code=404, detail="Target not found")
         await require_project_access(target.project_id, user)
+
+        # Delete associated heartbeat results first (FK constraint)
+        from app.database.models import HeartbeatResult
+        await session.execute(
+            select(HeartbeatResult).where(HeartbeatResult.target_id == target_id)
+        )
+        await session.execute(
+            select(MonitoredTarget).where(MonitoredTarget.id == target_id)
+        )
+        # Use raw delete for associated records to avoid cascade issues
+        from sqlalchemy import delete
+        await session.execute(
+            delete(HeartbeatResult).where(HeartbeatResult.target_id == target_id)
+        )
 
         await session.delete(target)
         await session.flush()
