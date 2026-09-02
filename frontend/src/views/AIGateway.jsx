@@ -2,13 +2,14 @@ import { useState, useEffect } from 'react'
 import { apiUrl } from '../utils/api.js'
 
 const API = apiUrl('/v1')
+const API_V1 = apiUrl('/api/v1')
 
 function authHeaders() {
   const token = localStorage.getItem('token')
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-function ProviderCard({ provider }) {
+function ProviderCard({ provider, isAdmin, onTest, onToggle, testing }) {
   const stateColors = {
     closed: 'var(--accent-green)',
     open: 'var(--accent-red)',
@@ -18,13 +19,42 @@ function ProviderCard({ provider }) {
   return (
     <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-md)' }}>
-        <h3 style={{ fontSize: '16px', fontWeight: 600, textTransform: 'capitalize' }}>
-          {provider.name}
-        </h3>
+        <div>
+          <h3 style={{ fontSize: '16px', fontWeight: 600 }}>
+            {provider.display_name || provider.name}
+          </h3>
+          <span className="mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+            {provider.name}
+          </span>
+        </div>
         <span className={`status-badge ${provider.status}`}>
           <span className={`status-dot ${provider.status}`}></span>
           {provider.status}
         </span>
+      </div>
+
+      {/* Configuration Status */}
+      <div style={{
+        padding: 'var(--space-sm)', marginBottom: 'var(--space-md)',
+        background: provider.is_configured ? 'rgba(34, 197, 94, 0.08)' : 'rgba(245, 158, 11, 0.08)',
+        border: `1px solid ${provider.is_configured ? 'rgba(34, 197, 94, 0.2)' : 'rgba(245, 158, 11, 0.2)'}`,
+        borderRadius: 'var(--radius-sm)', fontSize: '12px',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ color: provider.is_configured ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>
+            {provider.is_configured ? '🔑 API Key Configured' : '⚠️ Not Configured'}
+          </span>
+          {provider.is_configured && provider.key_last_four && (
+            <span className="mono" style={{ color: 'var(--text-muted)' }}>
+              ••••••••{provider.key_last_four}
+            </span>
+          )}
+        </div>
+        {provider.configured_at && (
+          <div style={{ color: 'var(--text-muted)', marginTop: '2px' }}>
+            Configured: {new Date(provider.configured_at).toLocaleDateString()}
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-sm)' }}>
@@ -32,16 +62,17 @@ function ProviderCard({ provider }) {
           <div className="metric-label">Success Rate</div>
           <div className="mono" style={{
             fontSize: '14px',
-            color: provider.success_rate >= 0.95 ? 'var(--accent-green)' :
+            color: provider.total_requests === 0 ? 'var(--text-muted)' :
+              provider.success_rate >= 0.95 ? 'var(--accent-green)' :
               provider.success_rate >= 0.8 ? 'var(--accent-yellow)' : 'var(--accent-red)',
           }}>
-            {(provider.success_rate * 100).toFixed(1)}%
+            {provider.total_requests === 0 ? 'No requests' : `${(provider.success_rate * 100).toFixed(1)}%`}
           </div>
         </div>
         <div>
           <div className="metric-label">Avg Latency</div>
           <div className="mono" style={{ fontSize: '14px' }}>
-            {provider.avg_latency_ms.toFixed(0)}ms
+            {provider.total_requests === 0 ? '—' : `${provider.avg_latency_ms.toFixed(0)}ms`}
           </div>
         </div>
         <div>
@@ -77,16 +108,6 @@ function ProviderCard({ provider }) {
         </div>
       </div>
 
-      {provider.cooldown_until && (
-        <div style={{
-          marginTop: 'var(--space-sm)', padding: 'var(--space-xs) var(--space-sm)',
-          background: 'rgba(245, 158, 11, 0.1)', borderRadius: 'var(--radius-sm)',
-          border: '1px solid rgba(245, 158, 11, 0.2)', fontSize: '12px', color: 'var(--accent-yellow)',
-        }}>
-          ⏳ Cooldown until: {new Date(provider.cooldown_until).toLocaleString()}
-        </div>
-      )}
-
       {provider.capabilities && provider.capabilities.length > 0 && (
         <div style={{ marginTop: 'var(--space-md)' }}>
           <div className="metric-label" style={{ marginBottom: '4px' }}>Capabilities</div>
@@ -120,6 +141,120 @@ function ProviderCard({ provider }) {
           </div>
         </div>
       )}
+
+      {/* Admin Actions */}
+      {isAdmin && (
+        <div style={{ marginTop: 'var(--space-md)', display: 'flex', gap: 'var(--space-sm)' }}>
+          <button
+            className="btn"
+            onClick={() => onTest(provider.name)}
+            disabled={testing === provider.name || !provider.is_configured}
+            style={{ fontSize: '11px', flex: 1 }}
+          >
+            {testing === provider.name ? 'Testing...' : '🔌 Test Connection'}
+          </button>
+          <button
+            className="btn"
+            onClick={() => onToggle(provider.name, provider.status !== 'disabled')}
+            style={{
+              fontSize: '11px',
+              color: provider.status === 'disabled' ? 'var(--accent-green)' : 'var(--accent-red)',
+            }}
+          >
+            {provider.status === 'disabled' ? '▶ Enable' : '⏸ Disable'}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AddProviderForm({ onCreated, onCancel }) {
+  const [provider, setProvider] = useState('gemini')
+  const [apiKey, setApiKey] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+    try {
+      const res = await fetch(`${API_V1}/providers`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: provider, api_key: apiKey }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.detail || 'Failed to configure provider')
+        return
+      }
+      onCreated(data)
+    } catch (err) {
+      setError('Connection failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const inputStyle = {
+    width: '100%', background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)',
+    borderRadius: 'var(--radius-sm)', padding: '8px 12px', color: 'var(--text-primary)',
+    fontSize: '13px', outline: 'none', fontFamily: 'inherit',
+  }
+
+  return (
+    <div className="card" style={{ maxWidth: '500px' }}>
+      <div className="card-header">
+        <span className="card-title">ADD PROVIDER</span>
+      </div>
+      {error && (
+        <div style={{
+          padding: '8px 12px', borderRadius: 'var(--radius-sm)',
+          background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)',
+          color: 'var(--accent-red)', fontSize: '13px', marginBottom: 'var(--space-md)',
+        }}>
+          {error}
+        </div>
+      )}
+      <form onSubmit={handleSubmit}>
+        <div style={{ marginBottom: 'var(--space-md)' }}>
+          <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase' }}>
+            Provider
+          </label>
+          <select value={provider} onChange={e => setProvider(e.target.value)} style={inputStyle}>
+            <option value="gemini">Google Gemini</option>
+            <option value="openai">OpenAI</option>
+            <option value="groq">Groq</option>
+          </select>
+        </div>
+        <div style={{ marginBottom: 'var(--space-md)' }}>
+          <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase' }}>
+            API Key
+          </label>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={e => setApiKey(e.target.value)}
+            placeholder="Enter your API key"
+            required
+            minLength={8}
+            style={{ ...inputStyle, fontFamily: 'var(--font-mono)' }}
+          />
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+            🔒 Key is encrypted before storage. Never returned in responses.
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
+          <button type="submit" disabled={loading} className="btn btn-primary" style={{ flex: 1 }}>
+            {loading ? 'Configuring...' : 'Configure Provider'}
+          </button>
+          <button type="button" onClick={onCancel} className="btn" style={{ color: 'var(--text-muted)' }}>
+            Cancel
+          </button>
+        </div>
+      </form>
     </div>
   )
 }
@@ -127,18 +262,79 @@ function ProviderCard({ provider }) {
 export default function AIGateway() {
   const [providers, setProviders] = useState([])
   const [loading, setLoading] = useState(true)
+  const [showAdd, setShowAdd] = useState(false)
+  const [testing, setTesting] = useState(null)
+  const [testResult, setTestResult] = useState(null)
+  const [isAdmin, setIsAdmin] = useState(false)
 
-  useEffect(() => { loadProviders() }, [])
+  useEffect(() => {
+    loadProviders()
+    checkAdmin()
+  }, [])
+
+  async function checkAdmin() {
+    try {
+      const res = await fetch(`${API_V1}/auth/me`, { headers: authHeaders() })
+      if (res.ok) {
+        const data = await res.json()
+        setIsAdmin(data.role === 'admin')
+      }
+    } catch {}
+  }
 
   async function loadProviders() {
     try {
-      const res = await fetch(API + '/providers', { headers: authHeaders() })
+      const res = await fetch(`${API_V1}/providers`, { headers: authHeaders() })
       if (res.ok) setProviders(await res.json())
     } catch (e) { console.error(e) }
     finally { setLoading(false) }
   }
 
+  async function handleTest(name) {
+    setTesting(name)
+    setTestResult(null)
+    try {
+      const res = await fetch(`${API_V1}/providers/${name}/test`, {
+        method: 'POST',
+        headers: authHeaders(),
+      })
+      const data = await res.json()
+      setTestResult({ provider: name, ...data })
+      // Refresh providers
+      await loadProviders()
+    } catch (e) {
+      setTestResult({ provider: name, success: false, error: 'Request failed' })
+    } finally {
+      setTesting(null)
+    }
+  }
+
+  async function handleToggle(name, activate) {
+    try {
+      await fetch(`${API_V1}/providers/${name}`, {
+        method: 'PATCH',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: activate }),
+      })
+      await loadProviders()
+    } catch (e) { console.error(e) }
+  }
+
+  function handleCreated(provider) {
+    setProviders(prev => {
+      const idx = prev.findIndex(p => p.name === provider.name)
+      if (idx >= 0) {
+        const next = [...prev]
+        next[idx] = provider
+        return next
+      }
+      return [...prev, provider]
+    })
+    setShowAdd(false)
+  }
+
   const healthyCount = providers.filter(p => p.status === 'healthy').length
+  const configuredCount = providers.filter(p => p.is_configured).length
   const circuitOpen = providers.filter(p => p.circuit_state === 'open').length
   const totalRequests = providers.reduce((sum, p) => sum + p.total_requests, 0)
 
@@ -146,10 +342,18 @@ export default function AIGateway() {
     <div>
       <div className="page-header">
         <h1>🤖 AI Gateway</h1>
-        <span className="mono" style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
-          /v1/chat/completions
-        </span>
+        {isAdmin && (
+          <button className="btn btn-primary" onClick={() => setShowAdd(!showAdd)}>
+            {showAdd ? '✕ Cancel' : '+ Add Provider'}
+          </button>
+        )}
       </div>
+
+      {showAdd && (
+        <div style={{ marginBottom: 'var(--space-lg)' }}>
+          <AddProviderForm onCreated={handleCreated} onCancel={() => setShowAdd(false)} />
+        </div>
+      )}
 
       {/* Summary */}
       <div className="bento-grid" style={{ marginBottom: 'var(--space-lg)' }}>
@@ -158,15 +362,15 @@ export default function AIGateway() {
           <div className="metric-value">{providers.length}</div>
         </div>
         <div className="card">
-          <div className="card-title">Healthy</div>
-          <div className="metric-value" style={{ color: healthyCount > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>
-            {healthyCount}
+          <div className="card-title">Configured</div>
+          <div className="metric-value" style={{ color: configuredCount > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>
+            {configuredCount}
           </div>
         </div>
         <div className="card">
-          <div className="card-title">Circuit Open</div>
-          <div className="metric-value" style={{ color: circuitOpen > 0 ? 'var(--accent-red)' : 'var(--accent-green)' }}>
-            {circuitOpen}
+          <div className="card-title">Healthy</div>
+          <div className="metric-value" style={{ color: healthyCount > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>
+            {healthyCount}
           </div>
         </div>
         <div className="card">
@@ -174,6 +378,23 @@ export default function AIGateway() {
           <div className="metric-value">{totalRequests}</div>
         </div>
       </div>
+
+      {/* Test Result Banner */}
+      {testResult && (
+        <div style={{
+          padding: 'var(--space-sm) var(--space-md)',
+          marginBottom: 'var(--space-md)',
+          background: testResult.success ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+          border: `1px solid ${testResult.success ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+          borderRadius: 'var(--radius-sm)', fontSize: '13px',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <span>
+            {testResult.success ? '✅' : '❌'} {testResult.provider}: {testResult.success ? 'Connection successful' : testResult.error || 'Connection failed'}
+          </span>
+          <button onClick={() => setTestResult(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>✕</button>
+        </div>
+      )}
 
       {/* Provider Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 'var(--space-md)' }}>
@@ -187,21 +408,25 @@ export default function AIGateway() {
             <h2 style={{ fontSize: '16px', fontWeight: 600, marginBottom: 'var(--space-sm)' }}>
               No providers configured
             </h2>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
-              Add API keys to your environment to enable AI-powered incident analysis.
+            <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: 'var(--space-md)' }}>
+              Add an AI provider to enable intelligent incident analysis.
             </p>
-            <div style={{
-              marginTop: 'var(--space-md)', padding: 'var(--space-sm)',
-              background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)',
-              fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-muted)',
-              textAlign: 'left',
-            }}>
-              GEMINI_API_KEY=your-key-here
-            </div>
+            {isAdmin && (
+              <button className="btn btn-primary" onClick={() => setShowAdd(true)}>
+                + Add Your First Provider
+              </button>
+            )}
           </div>
         ) : (
           providers.map(p => (
-            <ProviderCard key={p.name} provider={p} />
+            <ProviderCard
+              key={p.name}
+              provider={p}
+              isAdmin={isAdmin}
+              onTest={handleTest}
+              onToggle={handleToggle}
+              testing={testing}
+            />
           ))
         )}
       </div>

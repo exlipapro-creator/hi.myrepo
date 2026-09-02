@@ -303,12 +303,14 @@ def create_app() -> FastAPI:
     from app.api.telemetry import router as telemetry_router
     from app.api.audit import router as audit_router
     from app.api.memory import router as memory_router
+    from app.api.providers import router as providers_router
 
     app.include_router(auth_router, prefix="/api/v1/auth", tags=["Authentication"])
     app.include_router(projects_router, prefix="/api/v1/projects", tags=["Projects"])
     app.include_router(events_router, prefix="/api/v1/events", tags=["Events"])
     app.include_router(incidents_router, prefix="/api/v1/incidents", tags=["Incidents"])
     app.include_router(gateway_router, prefix="/v1", tags=["AI Gateway"])
+    app.include_router(providers_router, prefix="/api/v1/providers", tags=["AI Providers"])
     app.include_router(runbooks_router, prefix="/api/v1/runbooks", tags=["Runbooks"])
     app.include_router(telemetry_router, prefix="/api/v1/telemetry", tags=["Telemetry"])
     app.include_router(audit_router, prefix="/api/v1/audit", tags=["Audit Logs"])

@@ -464,6 +464,8 @@ class AIProvider(Base):
     circuit_state: Mapped[str] = mapped_column(String(20), default="closed")  # closed, open, half_open
     capabilities: Mapped[list] = mapped_column(JSONB, default=list)  # text, vision, reasoning, code, speed
     models_available: Mapped[list] = mapped_column(JSONB, default=list)
+    api_key_encrypted: Mapped[str] = mapped_column(Text, nullable=True)  # Encrypted API key
+    configured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
