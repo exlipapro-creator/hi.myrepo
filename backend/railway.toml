@@ -1,9 +1,13 @@
+# Railway configuration for hi.myrepo backend
+# The Dockerfile CMD handles startup and honors Railway's PORT env var.
+# Do NOT add a startCommand here — it would override the Dockerfile CMD
+# and prevent Railway's injected PORT from being used.
+
 [build]
 builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "uvicorn app.main:app --host 0.0.0.0 --port 8000"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"

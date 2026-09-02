@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { formatDistanceToNow } from 'date-fns'
+import { apiUrl } from '../utils/api.js'
 
-const API = '/api/v1'
+const API = apiUrl('/api/v1')
 
 function authHeaders() {
   const token = localStorage.getItem('token')

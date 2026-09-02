@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
+import { apiUrl } from './utils/api.js'
 import Auth from './views/Auth.jsx'
 import Dashboard from './views/Dashboard.jsx'
 import Incidents from './views/Incidents.jsx'
@@ -56,7 +57,7 @@ export default function App() {
   // Validate token on mount
   useEffect(() => {
     if (!token) return
-    fetch('/api/v1/auth/me', { headers: { Authorization: `Bearer ${token}` } })
+    fetch(apiUrl('/api/v1/auth/me'), { headers: { Authorization: `Bearer ${token}` } })
       .then(res => {
         if (!res.ok) {
           localStorage.removeItem('token')

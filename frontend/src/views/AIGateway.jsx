@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
+import { apiUrl } from '../utils/api.js'
 
-const API = '/api/v1'
+const API = apiUrl('/api/v1')
 
 function authHeaders() {
   const token = localStorage.getItem('token')
@@ -15,7 +16,7 @@ export default function AIGateway() {
 
   async function loadProviders() {
     try {
-      const res = await fetch('/v1/providers', { headers: authHeaders() })
+      const res = await fetch(apiUrl('/v1/providers'), { headers: authHeaders() })
       if (res.ok) setProviders(await res.json())
     } catch (e) { console.error(e) }
     finally { setLoading(false) }

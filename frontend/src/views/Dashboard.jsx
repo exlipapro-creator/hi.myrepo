@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { Activity, AlertTriangle, CheckCircle, Clock, Zap } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
+import { apiUrl } from '../utils/api.js'
 
-const API = '/api/v1'
+const API = apiUrl('/api/v1')
 
 export default function Dashboard() {
   const [projects, setProjects] = useState([])

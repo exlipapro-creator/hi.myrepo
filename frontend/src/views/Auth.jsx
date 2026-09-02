@@ -1,6 +1,7 @@
 import { useState } from 'react'
+import { apiUrl } from '../utils/api.js'
 
-const API = '/api/v1'
+const API = apiUrl('/api/v1')
 
 export default function Auth({ onLogin }) {
   const [mode, setMode] = useState('login')

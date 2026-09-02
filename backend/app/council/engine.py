@@ -130,8 +130,9 @@ class CouncilEngine:
             agents_used.append(CouncilRole.LEAD_SYNTHESIZER)
             rounds += 1
 
-        # Check budget
-        if rounds >= self.budget.MAX_ROUNDS:
+        # Check budget: completing exactly MAX_ROUNDS is expected behavior.
+        # Budget is only exceeded if rounds go beyond the allowed maximum.
+        if rounds > self.budget.MAX_ROUNDS:
             budget_exceeded = True
 
         # Build the verdict from all evidence

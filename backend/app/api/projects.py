@@ -268,12 +268,37 @@ async def project_health(
         )
         unhealthy_deps = dep_result2.scalar() or 0
 
+        # Compute recent error rate from the last hour of events
+        from datetime import timedelta
+        one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+
+        total_recent = (await session.execute(
+            select(func.count()).where(
+                Event.project_id == project_id,
+                Event.received_at >= one_hour_ago,
+            )
+        )).scalar() or 0
+
+        error_recent = (await session.execute(
+            select(func.count()).where(
+                Event.project_id == project_id,
+                Event.event_type == "ERROR_DETECTED",
+                Event.received_at >= one_hour_ago,
+            )
+        )).scalar() or 0
+
+        recent_error_rate = round(error_recent / total_recent, 4) if total_recent > 0 else 0.0
+
         # Determine health
         health = "healthy"
         if active_incidents > 0:
             health = "degraded" if active_incidents < 3 else "unhealthy"
         if unhealthy_deps > 0:
             health = "degraded"
+        if recent_error_rate > 0.1:
+            health = "degraded"
+        if recent_error_rate > 0.3:
+            health = "unhealthy"
 
         return ProjectHealthResponse(
             project_id=str(project_id),
@@ -284,5 +309,5 @@ async def project_health(
             total_deployments=deployment_count,
             healthy_dependencies=healthy_deps,
             unhealthy_dependencies=unhealthy_deps,
-            recent_error_rate=0.0,  # TODO: compute from recent events
+            recent_error_rate=recent_error_rate,
         )

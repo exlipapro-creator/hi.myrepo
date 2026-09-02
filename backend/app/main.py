@@ -147,8 +147,9 @@ def create_app() -> FastAPI:
     async def rate_limit_middleware(request: Request, call_next):
         # Apply rate limiting to API routes (not health/root/webhooks)
         path = request.url.path
-        # Exempt health, root, webhooks from rate limiting
-        if path.startswith("/api/v1/") or (path.startswith("/v1/") and not path.startswith("/v1/chat")):
+        # Apply rate limiting to all API routes including AI gateway
+        # Exempt: health (/health, /ready), root (/), webhooks (/webhooks)
+        if path.startswith("/api/v1/") or path.startswith("/v1/"):
             key = f"{get_remote_address(request)}:{path.split('/')[3] if len(path.split('/')) > 3 else 'default'}"
             # Simple in-memory rate limiter (single-instance)
             import time
@@ -271,12 +272,16 @@ def create_app() -> FastAPI:
         available_providers = settings.available_ai_providers
         checks["ai_providers"] = available_providers if available_providers else ["none_configured"]
 
-        return {
-            "status": overall,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "checks": checks,
-            "version": "0.1.0",
-        }
+        status_code = 200 if overall == "ready" else 503
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "status": overall,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "checks": checks,
+                "version": "0.1.0",
+            },
+        )
 
     @app.get("/")
     @limiter.exempt

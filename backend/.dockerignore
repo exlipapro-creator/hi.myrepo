@@ -1,0 +1,59 @@
+# .dockerignore — prevent secrets, caches, and dev artifacts from entering the production image
+
+# Environment files — secrets must never be baked into images
+.env
+.env.*
+!.env.example
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+.pytest_cache
+
+# Tests — not needed in production image
+tests/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Documentation
+docs/
+README.md
+LICENSE
+
+# Database migrations testing artifacts
+alembic/versions/*.pyc
+
+# Node (if accidentally present)
+node_modules/
+
+# Docker
+docker-compose*.yml
+Dockerfile
+
+# Railway/Render config (not needed at runtime)
+railway.toml
+render.yaml
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
