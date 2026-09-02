@@ -10,6 +10,7 @@ import sys
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 import structlog
 from fastapi import FastAPI, Request
@@ -39,18 +40,23 @@ async def lifespan(app: FastAPI):
     )
 
     # Run database migrations at startup
-    try:
-        import subprocess
-        result = subprocess.run(
-            [sys.executable, "-m", "alembic", "upgrade", "head"],
-            capture_output=True, text=True, timeout=60,
-        )
-        if result.returncode == 0:
-            logger.info("migrations_applied", output=result.stdout.strip()[-200:] if result.stdout else "ok")
-        else:
-            logger.warning("migration_warning", error=result.stderr.strip()[-200:] if result.stderr else "unknown")
-    except Exception as e:
-        logger.warning("migration_error", error=str(e))
+    if settings.is_production:
+        try:
+            from alembic.config import Config
+            from alembic import command
+            alembic_cfg = Config("alembic.ini")
+            alembic_cfg.set_main_option(
+                "script_location", str(Path(__file__).resolve().parent.parent / "alembic")
+            )
+            if settings.sync_database_url:
+                alembic_cfg.set_main_option(
+                    "sqlalchemy.url",
+                    settings.sync_database_url.replace("%", "%%"),
+                )
+            command.upgrade(alembic_cfg, "head")
+            logger.info("migrations_applied")
+        except Exception as e:
+            logger.warning("migration_error", error=str(e))
 
     # Startup: verify database connectivity
     healthy = await db_manager.health_check()
