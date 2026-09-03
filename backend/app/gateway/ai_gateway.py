@@ -442,7 +442,7 @@ class AIGateway:
                     error_message=str(e), error_classification=failure_type.value, session=session,
                 )
                 if not is_retryable(failure_type):
-                    raise ValueError(self._format_provider_error(provider_name, failure_type, e.response.status_code) + (f" | body: {resp_body}" if resp_body else ""))
+                    raise ValueError(self._format_provider_error(provider_name, failure_type, e.response.status_code))
                 last_error = e
                 cascade_count += 1
             except Exception as e:
