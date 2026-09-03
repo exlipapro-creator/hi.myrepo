@@ -153,8 +153,8 @@ class ProviderConfig:
         "groq": {
             "base_url": "https://api.groq.com/openai/v1",
             "api_key_env": "groq_api_key",
-            "models": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
-            "default_model": "llama-3.3-70b-versatile",
+            "models": ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "openai/gpt-oss-20b"],
+            "default_model": "openai/gpt-oss-120b",
             "capabilities": ["text", "speed", "code"],
             "timeout": 15,
         },

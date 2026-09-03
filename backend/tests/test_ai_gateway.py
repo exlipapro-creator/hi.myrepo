@@ -408,7 +408,7 @@ class TestProviderConfig:
     def test_groq_config_exists(self):
         config = ProviderConfig.get_config("groq")
         assert config is not None
-        assert "llama-3.3-70b-versatile" in config["models"]
+        assert "openai/gpt-oss-120b" in config["models"]
 
     def test_unknown_provider_returns_none(self):
         assert ProviderConfig.get_config("nonexistent") is None

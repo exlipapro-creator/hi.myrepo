@@ -62,7 +62,7 @@ PROVIDER_REGISTRY = {
         "name": "groq",
         "display_name": "Groq",
         "capabilities": ["text", "speed", "code"],
-        "models": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
+        "models": ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "openai/gpt-oss-20b"],
         "env_var": "GROQ_API_KEY",
         "base_url": "https://api.groq.com/openai/v1",
     },
