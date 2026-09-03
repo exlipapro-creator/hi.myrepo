@@ -534,7 +534,7 @@ class AIGateway:
             url = f"{base_url}/chat/completions"
             payload = {
                 "model": request.model,
-                "messages": [m.model_dump() for m in request.messages],
+                "messages": [m.model_dump(exclude_none=True) for m in request.messages],
             }
             if request.temperature is not None:
                 payload["temperature"] = request.temperature
