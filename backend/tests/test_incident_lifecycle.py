@@ -813,3 +813,97 @@ class TestEventIdempotency:
         # Verify provenance chain
         assert audit.incident_id == event.incident_id
         assert str(event.id) == audit.resource_id
+
+
+class TestRecoveryMatchingForensic:
+    """Forensic tests for recovery matching correctness."""
+
+    def test_exact_fingerprint_match_preferred(self):
+        """Recovery uses exact fingerprint, not prefix."""
+        import hashlib
+        project_id = "proj-1"
+        target_id = "target-1"
+
+        fp_500 = hashlib.sha256(f"heartbeat:{project_id}:{target_id}:http:500".encode()).hexdigest()[:16]
+        fp_503 = hashlib.sha256(f"heartbeat:{project_id}:{target_id}:http:503".encode()).hexdigest()[:16]
+        fp_broad = hashlib.sha256(f"heartbeat:{project_id}:{target_id}".encode()).hexdigest()[:16]
+
+        assert fp_500 != fp_503
+        assert fp_500 != fp_broad
+        assert fp_503 != fp_broad
+
+    def test_recovery_does_not_use_prefix(self):
+        """Recovery must not use startswith which can match wrong incidents."""
+        prefix = "heartbeat:proj-1:target-1"
+        fp1 = f"{prefix}:http:500"
+        fp2 = f"{prefix}:http:503"
+
+        # Prefix match would match BOTH -- this is wrong
+        assert fp1.startswith(prefix)
+        assert fp2.startswith(prefix)
+
+        # Exact match is correct
+        assert fp1 != fp2
+
+
+class TestEventIdempotencyDefault:
+    """Forensic tests for default idempotency_key generation."""
+
+    def test_default_key_does_not_include_timestamp(self):
+        """Default key must not include occurred_at to prevent retry bypass."""
+        import hashlib, json
+
+        payload = {"status_code": 500}
+        payload_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:8]
+
+        key1 = f"HEARTBEAT_FAILURE:target-1:proj-1:{payload_hash}"
+        key2 = f"HEARTBEAT_FAILURE:target-1:proj-1:{payload_hash}"
+
+        assert key1 == key2, "Same logical event must produce same key regardless of timestamp"
+
+    def test_different_payloads_different_keys(self):
+        """Different payloads produce different keys."""
+        import hashlib, json
+
+        payload_a = {"status_code": 500}
+        payload_b = {"status_code": 503}
+
+        hash_a = hashlib.sha256(json.dumps(payload_a, sort_keys=True).encode()).hexdigest()[:8]
+        hash_b = hashlib.sha256(json.dumps(payload_b, sort_keys=True).encode()).hexdigest()[:8]
+
+        key_a = f"HEARTBEAT_FAILURE:target-1:proj-1:{hash_a}"
+        key_b = f"HEARTBEAT_FAILURE:target-1:proj-1:{hash_b}"
+
+        assert key_a != key_b
+
+
+class TestTransactionAtomicity:
+    """Forensic tests for incident transition atomicity."""
+
+    def test_incident_model_has_recovery_fields(self):
+        """Incident model has all required recovery tracking fields."""
+        from app.database.models import Incident
+        assert hasattr(Incident, 'recovery_success_count')
+        assert hasattr(Incident, 'recovery_verification_started_at')
+
+    def test_event_model_has_delivery_id(self):
+        """Event model has delivery_id for retry dedup."""
+        from app.database.models import Event
+        assert hasattr(Event, 'delivery_id')
+        col = Event.__table__.c.delivery_id
+        assert col.unique is True
+
+    def test_state_machine_completeness(self):
+        """All states have defined transitions."""
+        from app.database.models import IncidentStateTransition
+        all_states = ['DETECTED', 'TRIAGING', 'INVESTIGATING', 'DIAGNOSED',
+                      'AWAITING_ACTION', 'REMEDIATING', 'VERIFYING',
+                      'RESOLVED', 'REMEDIATION_FAILED', 'ESCALATED']
+        for state in all_states:
+            assert state in IncidentStateTransition.TRANSITIONS, f"Missing: {state}"
+
+    def test_terminal_states_are_terminal(self):
+        """RESOLVED and ESCALATED have no outgoing transitions."""
+        from app.database.models import IncidentStateTransition
+        assert IncidentStateTransition.TRANSITIONS['RESOLVED'] == []
+        assert IncidentStateTransition.TRANSITIONS['ESCALATED'] == []

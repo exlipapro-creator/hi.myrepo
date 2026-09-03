@@ -111,13 +111,14 @@ class EventProcessor:
         if envelope.idempotency_key is None:
             # Include payload hash to distinguish truly identical events
             # from events that happen to share type/source/project/timestamp
+            # NOTE: Do NOT include occurred_at in the default key — retries may
+            # have different timestamps but represent the same logical event.
             import hashlib as _hl
             payload_bytes = json.dumps(envelope.payload, sort_keys=True, default=str).encode()
             payload_hash = _hl.sha256(payload_bytes).hexdigest()[:8]
             envelope.idempotency_key = (
                 f"{envelope.event_type}:{envelope.source}:"
-                f"{envelope.project_id}:{envelope.occurred_at.isoformat()}:"
-                f"{payload_hash}"
+                f"{envelope.project_id}:{payload_hash}"
             )
 
         # Check delivery dedup (same delivery attempt = return existing)
