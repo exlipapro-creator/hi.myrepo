@@ -24,33 +24,72 @@ const NAV_ITEMS = [
   { to: '/audit', icon: FileText, label: 'Audit' },
 ]
 
-function Sidebar({ onLogout, isOpen, onClose }) {
+function Sidebar({ onLogout }) {
+  return (
+    <nav className="sidebar">
+      <div className="sidebar-logo">
+        hi.myrepo
+        <span>COMMAND CENTER</span>
+      </div>
+      <div className="sidebar-nav">
+        {NAV_ITEMS.map(({ to, icon: Icon, label, end }) => (
+          <NavLink key={to} to={to} end={end}>
+            <Icon size={16} />
+            {label}
+          </NavLink>
+        ))}
+      </div>
+      <div style={{ marginTop: 'auto', paddingTop: 'var(--space-lg)' }}>
+        <button
+          onClick={onLogout}
+          className="btn"
+          style={{ width: '100%', justifyContent: 'center', fontSize: '12px', color: 'var(--text-muted)' }}
+        >
+          <LogOut size={14} /> Logout
+        </button>
+      </div>
+    </nav>
+  )
+}
+
+function MobileDrawer({ onLogout, isOpen, onClose }) {
   return (
     <>
-      <div className={`sidebar-overlay ${isOpen ? 'visible' : ''}`} onClick={onClose} />
-      <nav className={`sidebar ${isOpen ? 'open' : ''}`}>
-        <div className="sidebar-logo">
-          hi.myrepo
-          <span>COMMAND CENTER</span>
-        </div>
-        <div className="sidebar-nav">
-          {NAV_ITEMS.map(({ to, icon: Icon, label, end }) => (
-            <NavLink key={to} to={to} end={end} onClick={onClose}>
-              <Icon size={16} />
-              {label}
-            </NavLink>
-          ))}
-        </div>
-        <div style={{ marginTop: 'auto', paddingTop: 'var(--space-lg)' }}>
+      <div className={`drawer-overlay ${isOpen ? 'visible' : ''}`} onClick={onClose} />
+      <div className={`drawer ${isOpen ? 'open' : ''}`}>
+        {/* Header */}
+        <div className="drawer-header">
+          <div className="drawer-brand">
+            <span className="drawer-brand-name">hi.myrepo</span>
+            <span className="drawer-brand-sub">CONTROL PLANE</span>
+          </div>
           <button
-            onClick={onLogout}
-            className="btn"
-            style={{ width: '100%', justifyContent: 'center', fontSize: '12px', color: 'var(--text-muted)' }}
+            className="drawer-close"
+            onClick={onClose}
+            aria-label="Close navigation"
           >
-            <LogOut size={14} /> Logout
+            <X size={20} />
           </button>
         </div>
-      </nav>
+
+        {/* Navigation */}
+        <nav className="drawer-nav">
+          {NAV_ITEMS.map(({ to, icon: Icon, label, end }) => (
+            <NavLink key={to} to={to} end={end} className="drawer-nav-item" onClick={onClose}>
+              <Icon size={18} />
+              <span>{label}</span>
+            </NavLink>
+          ))}
+        </nav>
+
+        {/* Bottom action */}
+        <div className="drawer-footer">
+          <button onClick={onLogout} className="drawer-nav-item drawer-logout">
+            <LogOut size={18} />
+            <span>Logout</span>
+          </button>
+        </div>
+      </div>
     </>
   )
 }
@@ -113,7 +152,8 @@ export default function App() {
           {sidebarOpen ? <X size={22} /> : <Menu size={22} />}
         </button>
       </div>
-      <Sidebar onLogout={handleLogout} isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Sidebar onLogout={handleLogout} />
+      <MobileDrawer onLogout={handleLogout} isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <main className="main-content">
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
