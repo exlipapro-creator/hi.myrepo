@@ -385,6 +385,12 @@ class AIGateway:
             if not api_key:
                 continue
 
+            # Skip providers that don't support the requested model
+            supported_models = config.get("models", [])
+            if supported_models and request.model not in supported_models:
+                cascade_count += 1
+                continue
+
             cb = self._get_circuit_breaker(provider_name)
             if not cb.can_execute():
                 cascade_count += 1
