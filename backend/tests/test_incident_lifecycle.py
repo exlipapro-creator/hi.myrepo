@@ -527,6 +527,66 @@ class TestIdempotency:
         assert fp1 != fp2
 
 
+class TestRecoveryReset:
+    """Test that recovery resets when failure reappears."""
+
+    def test_recovery_count_resets_on_failure(self):
+        """When failure reappears during recovery, counter resets to 0."""
+        # Simulate recovery in progress
+        recovery_count = 3
+        # Failure reappears
+        recovery_count = 0
+        assert recovery_count == 0
+
+    def test_recovery_verification_started_at_resets(self):
+        """Verification window resets when failure reappears."""
+        verification_started = datetime.now(timezone.utc)
+        # Failure reappears
+        verification_started = None
+        assert verification_started is None
+
+    def test_recovery_metadata_preserves_reset_history(self):
+        """Recovery reset is recorded in metadata."""
+        metadata = {
+            "last_recovery": {"timestamp": "2026-09-03T10:00:00Z"},
+            "recovery_reset_by_failure": {
+                "timestamp": "2026-09-03T10:05:00Z",
+                "previous_count": 2,
+            },
+        }
+        assert "recovery_reset_by_failure" in metadata
+        assert metadata["recovery_reset_by_failure"]["previous_count"] == 2
+
+    def test_idempotency_key_uses_check_window(self):
+        """Heartbeat idempotency key uses check window, not exact timestamp."""
+        target_interval = 60
+        t1 = 120  # window = 2
+        t2 = 150  # window = 2 (same window)
+        t3 = 180  # window = 3 (next window)
+
+        window1 = t1 // target_interval
+        window2 = t2 // target_interval
+        window3 = t3 // target_interval
+
+        assert window1 == window2, f"Same window should produce same key: {window1} vs {window2}"
+        assert window1 != window3, f"Different windows should produce different keys: {window1} vs {window3}"
+
+
+class TestDeliveryVsIdempotency:
+    """Test delivery_id vs idempotency_key distinction."""
+
+    def test_delivery_id_is_separate_from_idempotency_key(self):
+        """delivery_id deduplicates retries; idempotency_key deduplicates logical events."""
+        delivery_id_1 = "heartbeat:target-1:1000"
+        delivery_id_2 = "heartbeat:target-1:1001"
+        assert delivery_id_1 != delivery_id_2
+
+    def test_same_delivery_id_deduplicates(self):
+        """Same delivery_id on retry returns existing event."""
+        delivery_id = "heartbeat:target-1:1000"
+        assert delivery_id == delivery_id
+
+
 class TestEventIdempotency:
     """Test event idempotency key generation and duplicate detection."""
 

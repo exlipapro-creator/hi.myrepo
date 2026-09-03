@@ -23,8 +23,14 @@ class EventEnvelope(BaseModel):
     """
     The universal event envelope.
     Every subsystem produces events in this format.
+
+    Identity semantics:
+    - event_id: unique identifier for this specific event record (always unique)
+    - delivery_id: identifies a specific delivery attempt (for dedup of retries)
+    - idempotency_key: identifies the logical event (for dedup of logically identical events)
     """
     event_id: Optional[uuid.UUID] = None
+    delivery_id: Optional[str] = None  # Delivery attempt identifier (for retry dedup)
     event_type: str = Field(..., min_length=1, max_length=100)
     occurred_at: datetime
     received_at: Optional[datetime] = None
@@ -114,7 +120,13 @@ class EventProcessor:
                 f"{payload_hash}"
             )
 
-        # Check idempotency — do not duplicate
+        # Check delivery dedup (same delivery attempt = return existing)
+        if envelope.delivery_id:
+            existing_delivery = await self._check_delivery(session, envelope.delivery_id)
+            if existing_delivery:
+                return existing_delivery
+
+        # Check idempotency (logically identical event = return existing)
         existing = await self._check_idempotency(session, envelope.idempotency_key)
         if existing:
             return existing
@@ -122,6 +134,7 @@ class EventProcessor:
         # Create the immutable event record
         event = Event(
             id=envelope.event_id,
+            delivery_id=envelope.delivery_id,
             event_type=envelope.event_type,
             occurred_at=envelope.occurred_at,
             received_at=envelope.received_at,
@@ -143,10 +156,17 @@ class EventProcessor:
 
         return event
 
+    async def _check_delivery(self, session: AsyncSession, delivery_id: str) -> Optional[Event]:
+        """Check if an event with this delivery ID already exists (retry dedup)."""
+        result = await session.execute(
+            select(Event).where(Event.delivery_id == delivery_id)
+        )
+        return result.scalar_one_or_none()
+
     async def _check_idempotency(
         self, session: AsyncSession, idempotency_key: str
     ) -> Optional[Event]:
-        """Check if an event with this idempotency key already exists."""
+        """Check if an event with this idempotency key already exists (logical dedup)."""
         result = await session.execute(
             select(Event).where(Event.idempotency_key == idempotency_key)
         )

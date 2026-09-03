@@ -703,6 +703,24 @@ class PipelineOrchestrator:
             existing = existing_incident.scalar_one_or_none()
 
             if existing:
+                # Reset recovery verification if failure reappears
+                if existing.recovery_success_count and existing.recovery_success_count > 0:
+                    existing.recovery_success_count = 0
+                    existing.recovery_verification_started_at = None
+                    existing.metadata_ = {
+                        **existing.metadata_,
+                        "recovery_reset_by_failure": {
+                            "timestamp": envelope.occurred_at.isoformat(),
+                            "previous_count": existing.recovery_success_count,
+                        },
+                    }
+                    result.actions_taken.append("recovery_verification_reset")
+                    logger.warning(
+                        "pipeline_recovery_reset_by_failure",
+                        incident_id=str(existing.id),
+                        target_url=target_url,
+                    )
+
                 # Update existing incident with new failure evidence
                 existing.summary = (
                     f"Heartbeat failure pattern: {failure_count} failures this hour. "

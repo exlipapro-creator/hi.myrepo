@@ -190,6 +190,12 @@ class HeartbeatWorker:
                 )
                 severity = "low" if is_healthy else ("medium" if is_degraded else "high")
 
+                # Idempotency key: target + check window (not exact timestamp)
+                # This ensures duplicate delivery within the same interval is deduplicated
+                # while legitimate repeated failures at different intervals are preserved
+                check_window = int(time.time()) // max(target.interval_seconds or 60, 1)
+                # Delivery ID: unique per attempt (for retry dedup)
+                delivery_id = f"heartbeat:{target.id}:{int(time.time())}"
                 envelope = EventEnvelope(
                     event_type=event_type,
                     occurred_at=datetime.now(timezone.utc),
@@ -197,7 +203,8 @@ class HeartbeatWorker:
                     source_type="heartbeat",
                     project_id=target.project_id,
                     severity=severity,
-                    idempotency_key=f"heartbeat:{target.id}:{int(time.time())}",
+                    delivery_id=delivery_id,
+                    idempotency_key=f"heartbeat:{target.id}:{check_window}",
                     payload={
                         "target_id": str(target.id),
                         "target_url": target.url,

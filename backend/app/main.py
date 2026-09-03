@@ -78,6 +78,17 @@ async def lifespan(app: FastAPI):
                     ))
                     logger.info("migration_provider_encryption_added")
 
+                # Check and add delivery_id column if missing
+                check_del = await session.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='events' AND column_name='delivery_id'"
+                ))
+                if not check_del.scalar():
+                    await session.execute(text(
+                        "ALTER TABLE events ADD COLUMN delivery_id VARCHAR(255) UNIQUE"
+                    ))
+                    logger.info("migration_delivery_id_added")
+
                 # Check and add recovery verification columns if missing
                 check3 = await session.execute(text(
                     "SELECT column_name FROM information_schema.columns "

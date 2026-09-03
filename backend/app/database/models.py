@@ -267,6 +267,7 @@ class Event(Base):
     trace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     severity: Mapped[str] = mapped_column(String(20), nullable=True)
     schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    delivery_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=True)  # Delivery attempt dedup
     idempotency_key: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
