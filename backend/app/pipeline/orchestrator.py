@@ -748,6 +748,13 @@ class PipelineOrchestrator:
                     correlation_id=envelope.correlation_id,
                 )
                 incident = await incident_engine.create_incident(incident_data, session)
+                # Store target_id in metadata for recovery matching
+                incident.metadata_ = {
+                    **incident.metadata_,
+                    "target_id": target_id,
+                    "target_url": target_url,
+                }
+                await session.flush()
                 result.incident = incident
                 result.actions_taken.append("heartbeat_incident_created")
                 logger.warning(
@@ -786,12 +793,13 @@ class PipelineOrchestrator:
         # for this project+target prefix
 
         # Find open heartbeat incidents for this target.
-        # Match by affected_component (target_url) which is set during incident creation.
-        # This correctly matches any failure-class-specific fingerprint for this target.
+        # Match by target_id stored in metadata during incident creation.
+        # This correctly matches even when the target URL changes (e.g., 500 -> 200).
+        from sqlalchemy import text
         existing_incident = await session.execute(
             select(Incident).where(
                 Incident.project_id == project_id,
-                Incident.affected_component == target_url,
+                Incident.metadata_["target_id"].astext == target_id,
                 Incident.status.notin_([IncidentStatus.RESOLVED, IncidentStatus.REMEDIATION_FAILED, IncidentStatus.ESCALATED]),
             )
         )
