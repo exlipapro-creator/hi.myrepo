@@ -381,7 +381,17 @@ class AIGateway:
             config = ProviderConfig.get_config(provider_name)
             if not config:
                 continue
+            # Try env var first, then fall back to encrypted DB key
             api_key = getattr(self._settings, config["api_key_env"], "")
+            if not api_key:
+                # Read from encrypted provider record in database
+                db_provider = providers.get(provider_name)
+                if db_provider and db_provider.api_key_encrypted:
+                    from app.security.auth import decrypt_secret
+                    try:
+                        api_key = decrypt_secret(db_provider.api_key_encrypted)
+                    except Exception:
+                        continue
             if not api_key:
                 continue
 
