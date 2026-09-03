@@ -268,6 +268,157 @@ function ProjectCard({ project, health, onClick }) {
   )
 }
 
+function MonitoredTargets({ projectId }) {
+  const [targets, setTargets] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [showAdd, setShowAdd] = useState(false)
+  const [editing, setEditing] = useState(null)
+  const [form, setForm] = useState({ name: '', url: '', interval_seconds: 60 })
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => { loadTargets() }, [projectId])
+
+  async function loadTargets() {
+    setLoading(true)
+    try {
+      const res = await fetch(`${API}/monitored-targets?project_id=${projectId}`, { headers: authHeaders() })
+      if (res.ok) setTargets(await res.json())
+    } catch (e) { console.error(e) }
+    finally { setLoading(false) }
+  }
+
+  async function handleAdd(e) {
+    e.preventDefault()
+    setError('')
+    setSaving(true)
+    try {
+      const res = await fetch(`${API}/monitored-targets?project_id=${projectId}`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: projectId, name: form.name, url: form.url, interval_seconds: parseInt(form.interval_seconds) || 60 }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.detail || 'Failed to add target'); return }
+      setTargets(prev => [data, ...prev])
+      setForm({ name: '', url: '', interval_seconds: 60 })
+      setShowAdd(false)
+    } catch (err) { setError('Connection failed') }
+    finally { setSaving(false) }
+  }
+
+  async function handleEdit(target) {
+    setEditing(target)
+    setForm({ name: target.name, url: target.url, interval_seconds: target.interval_seconds })
+    setShowAdd(true)
+  }
+
+  async function handleUpdate(e) {
+    e.preventDefault()
+    setError('')
+    setSaving(true)
+    try {
+      const res = await fetch(`${API}/monitored-targets/${editing.id}`, {
+        method: 'PATCH',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: form.name, url: form.url, interval_seconds: parseInt(form.interval_seconds) || 60 }),
+      })
+      if (!res.ok) { const d = await res.json(); setError(d.detail || 'Failed'); return }
+      setTargets(prev => prev.map(t => t.id === editing.id ? { ...t, name: form.name, url: form.url, interval_seconds: parseInt(form.interval_seconds) } : t))
+      setShowAdd(false)
+      setEditing(null)
+    } catch (err) { setError('Connection failed') }
+    finally { setSaving(false) }
+  }
+
+  async function handleDelete(target) {
+    if (!confirm(`Delete target "${target.name}"?`)) return
+    try {
+      const res = await fetch(`${API}/monitored-targets/${target.id}`, { method: 'DELETE', headers: authHeaders() })
+      if (res.ok || res.status === 204) setTargets(prev => prev.filter(t => t.id !== target.id))
+    } catch (e) { console.error(e) }
+  }
+
+  const inputStyle = {
+    width: '100%', background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)',
+    borderRadius: 'var(--radius-sm)', padding: '8px 12px', color: 'var(--text-primary)',
+    fontSize: '13px', outline: 'none', fontFamily: 'inherit',
+  }
+  const labelStyle = { display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase' }
+
+  return (
+    <div className="card" style={{ marginTop: 'var(--space-md)' }}>
+      <div className="card-header">
+        <span className="card-title">MONITORED TARGETS</span>
+        <button className="btn" onClick={() => { setShowAdd(!showAdd); setEditing(null); setForm({ name: '', url: '', interval_seconds: 60 }) }} style={{ fontSize: '11px', color: 'var(--accent-blue)' }}>
+          {showAdd ? '\u2715 Cancel' : '+ Add Target'}
+        </button>
+      </div>
+
+      {showAdd && (
+        <form onSubmit={editing ? handleUpdate : handleAdd} style={{ padding: 'var(--space-sm)', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', marginBottom: 'var(--space-md)' }}>
+          {error && <div style={{ padding: '6px 10px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-red)', fontSize: '12px', marginBottom: 'var(--space-sm)' }}>{error}</div>}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 1fr', gap: 'var(--space-sm)' }}>
+            <div>
+              <label style={labelStyle}>Name</label>
+              <input type="text" required value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} placeholder="Production API" style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>URL</label>
+              <input type="url" required value={form.url} onChange={e => setForm(p => ({ ...p, url: e.target.value }))} placeholder="https://api.example.com/health" style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>Interval (s)</label>
+              <input type="number" min="10" max="3600" value={form.interval_seconds} onChange={e => setForm(p => ({ ...p, interval_seconds: e.target.value }))} style={inputStyle} />
+            </div>
+          </div>
+          <div style={{ marginTop: 'var(--space-sm)', display: 'flex', gap: 'var(--space-sm)' }}>
+            <button type="submit" disabled={saving} className="btn btn-primary" style={{ fontSize: '12px' }}>
+              {saving ? 'Saving...' : editing ? 'Update Target' : 'Add Target'}
+            </button>
+            <button type="button" onClick={() => { setShowAdd(false); setEditing(null) }} className="btn" style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Cancel</button>
+          </div>
+        </form>
+      )}
+
+      {loading ? (
+        <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 'var(--space-md)', fontSize: '13px' }}>Loading targets...</div>
+      ) : targets.length === 0 ? (
+        <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 'var(--space-lg)', fontSize: '13px' }}>
+          No targets configured. Add a target to begin monitoring.
+        </div>
+      ) : (
+        <table>
+          <thead>
+            <tr><th>Name</th><th>URL</th><th>Interval</th><th>Status</th><th>Latency</th><th>Actions</th></tr>
+          </thead>
+          <tbody>
+            {targets.map(t => (
+              <tr key={t.id}>
+                <td style={{ fontWeight: 500 }}>{t.name}</td>
+                <td className="mono" style={{ fontSize: '12px', color: 'var(--accent-blue)', maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.url}</td>
+                <td className="mono" style={{ fontSize: '12px' }}>{t.interval_seconds}s</td>
+                <td>
+                  <span style={{ fontSize: '11px', padding: '2px 6px', borderRadius: '4px', background: t.is_active && !t.is_degraded ? 'rgba(34,197,94,0.1)' : t.is_degraded ? 'rgba(245,158,11,0.1)' : 'rgba(107,114,128,0.1)', color: t.is_active && !t.is_degraded ? 'var(--accent-green)' : t.is_degraded ? 'var(--accent-yellow)' : 'var(--text-muted)', border: `1px solid ${t.is_active && !t.is_degraded ? 'rgba(34,197,94,0.3)' : t.is_degraded ? 'rgba(245,158,11,0.3)' : 'rgba(107,114,128,0.2)'}` }}>
+                    {t.is_active ? (t.is_degraded ? 'DEGRADED' : 'ACTIVE') : 'DISABLED'}
+                  </span>
+                </td>
+                <td className="mono" style={{ fontSize: '12px' }}>{t.last_latency_ms != null ? `${t.last_latency_ms.toFixed(0)}ms` : '\u2014'}</td>
+                <td>
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    <button onClick={() => handleEdit(t)} style={{ background: 'none', border: 'none', color: 'var(--accent-blue)', cursor: 'pointer', fontSize: '11px' }}>Edit</button>
+                    <button onClick={() => handleDelete(t)} style={{ background: 'none', border: 'none', color: 'var(--accent-red)', cursor: 'pointer', fontSize: '11px' }}>Delete</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
 function ProjectDetail({ project, health, onBack, onMonitoringChange }) {
   const [monitoringLoading, setMonitoringLoading] = useState(false)
   const isMonitoring = project.monitoring_status === 'active'
@@ -457,6 +608,9 @@ function ProjectDetail({ project, health, onBack, onMonitoringChange }) {
           </div>
         </div>
       </div>
+
+      {/* Monitored Targets */}
+      <MonitoredTargets projectId={project.id} />
 
       {/* Repository */}
       {project.repository_url && (

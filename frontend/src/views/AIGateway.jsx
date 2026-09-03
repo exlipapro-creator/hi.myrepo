@@ -9,7 +9,7 @@ function authHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-function ProviderCard({ provider, isAdmin, onTest, onToggle, testing }) {
+function ProviderCard({ provider, isAdmin, onTest, onToggle, onDelete, onReplaceKey, testing }) {
   const stateColors = {
     closed: 'var(--accent-green)',
     open: 'var(--accent-red)',
@@ -144,14 +144,14 @@ function ProviderCard({ provider, isAdmin, onTest, onToggle, testing }) {
 
       {/* Admin Actions */}
       {isAdmin && (
-        <div style={{ marginTop: 'var(--space-md)', display: 'flex', gap: 'var(--space-sm)' }}>
+        <div style={{ marginTop: 'var(--space-md)', display: 'flex', gap: 'var(--space-sm)', flexWrap: 'wrap' }}>
           <button
             className="btn"
             onClick={() => onTest(provider.name)}
             disabled={testing === provider.name || !provider.is_configured}
             style={{ fontSize: '11px', flex: 1 }}
           >
-            {testing === provider.name ? 'Testing...' : '🔌 Test Connection'}
+            {testing === provider.name ? 'Testing...' : 'Test Connection'}
           </button>
           <button
             className="btn"
@@ -161,7 +161,23 @@ function ProviderCard({ provider, isAdmin, onTest, onToggle, testing }) {
               color: provider.status === 'disabled' ? 'var(--accent-green)' : 'var(--accent-red)',
             }}
           >
-            {provider.status === 'disabled' ? '▶ Enable' : '⏸ Disable'}
+            {provider.status === 'disabled' ? 'Enable' : 'Disable'}
+          </button>
+          {provider.is_configured && (
+            <button
+              className="btn"
+              onClick={() => onReplaceKey(provider.name)}
+              style={{ fontSize: '11px', color: 'var(--accent-yellow)' }}
+            >
+              Replace Key
+            </button>
+          )}
+          <button
+            className="btn"
+            onClick={() => onDelete(provider.name)}
+            style={{ fontSize: '11px', color: 'var(--accent-red)' }}
+          >
+            Delete
           </button>
         </div>
       )}
@@ -320,6 +336,27 @@ export default function AIGateway() {
     } catch (e) { console.error(e) }
   }
 
+  async function handleDelete(name) {
+    if (!confirm(`Delete provider "${name}"? This cannot be undone.`)) return
+    try {
+      const res = await fetch(`${API_V1}/providers/${name}`, { method: 'DELETE', headers: authHeaders() })
+      if (res.ok || res.status === 204) await loadProviders()
+    } catch (e) { console.error(e) }
+  }
+
+  async function handleReplaceKey(name) {
+    const key = prompt(`Enter new API key for ${name}:`)
+    if (!key || key.length < 8) return
+    try {
+      await fetch(`${API_V1}/providers/${name}`, {
+        method: 'PATCH',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: key }),
+      })
+      await loadProviders()
+    } catch (e) { console.error(e) }
+  }
+
   function handleCreated(provider) {
     setProviders(prev => {
       const idx = prev.findIndex(p => p.name === provider.name)
@@ -425,6 +462,8 @@ export default function AIGateway() {
               isAdmin={isAdmin}
               onTest={handleTest}
               onToggle={handleToggle}
+              onDelete={handleDelete}
+              onReplaceKey={handleReplaceKey}
               testing={testing}
             />
           ))
