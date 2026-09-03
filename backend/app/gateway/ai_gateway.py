@@ -393,10 +393,10 @@ class AIGateway:
                         )
                         db_provider = result.scalar_one_or_none()
                         if db_provider and db_provider.api_key_encrypted:
-                            from app.security.auth import decrypt_secret
+                            from app.security.encryption import decrypt_secret
                             api_key = decrypt_secret(db_provider.api_key_encrypted)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("provider_key_decrypt_failed", provider=provider_name, error=str(e))
             if not api_key:
                 continue
 
