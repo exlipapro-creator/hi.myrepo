@@ -428,6 +428,12 @@ class AIGateway:
                 return normalized
 
             except httpx.HTTPStatusError as e:
+                resp_body = ""
+                try:
+                    resp_body = e.response.text[:500]
+                except Exception:
+                    pass
+                logger.warning("provider_http_error", provider=provider_name, status=e.response.status_code, body=resp_body)
                 failure_type = classify_failure(e.response.status_code, str(e))
                 cb.record_failure()
                 await self._record_provider_event(
@@ -529,9 +535,11 @@ class AIGateway:
             payload = {
                 "model": request.model,
                 "messages": [m.model_dump() for m in request.messages],
-                "temperature": request.temperature,
-                "max_tokens": request.max_tokens,
             }
+            if request.temperature is not None:
+                payload["temperature"] = request.temperature
+            if request.max_tokens is not None:
+                payload["max_tokens"] = request.max_tokens
             if request.top_p is not None:
                 payload["top_p"] = request.top_p
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
