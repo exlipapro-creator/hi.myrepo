@@ -115,6 +115,30 @@ class IncidentEngine:
         if details:
             incident.metadata_ = {**incident.metadata_, **details}
 
+        # Record audit log for the state transition
+        from app.database.models import AuditLog
+        audit = AuditLog(
+            id=uuid.uuid4(),
+            action="incident.transition",
+            actor_type="system",
+            resource_type="incident",
+            resource_id=str(incident.id),
+            project_id=incident.project_id,
+            incident_id=incident.id,
+            details={
+                "from_status": current_status,
+                "to_status": target_status,
+                "transition_details": details,
+            },
+            evidence={
+                "fingerprint": incident.fingerprint,
+                "severity": incident.severity,
+            },
+            authorization={"status": "automatic"},
+            outcome="success",
+        )
+        session.add(audit)
+
         await session.flush()
         return incident
 
@@ -206,7 +230,11 @@ class IncidentEngine:
         return incident
 
     def _escalate_severity(self, current: str) -> str:
-        """Escalate severity level."""
+        """Escalate severity level, bounded by 'critical' ceiling.
+
+        Severity escalation is intentional: repeated heartbeat failures for the same
+        fingerprint warrant escalation. However, it must not exceed 'critical'.
+        """
         levels = ["low", "medium", "high", "critical"]
         idx = levels.index(current) if current in levels else 1
         return levels[min(idx + 1, len(levels) - 1)]

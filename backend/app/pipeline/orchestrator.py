@@ -208,6 +208,10 @@ class PipelineOrchestrator:
         if envelope.event_type in ("HEARTBEAT_FAILURE", "HEARTBEAT_DEGRADED"):
             await self._check_heartbeat_pattern(envelope, session, result)
 
+        # If heartbeat recovered, check for open incidents to update
+        if envelope.event_type == "HEARTBEAT_SUCCESS":
+            await self._check_heartbeat_recovery(envelope, session, result)
+
         return result
 
     # ── Internal pipeline stages ──────────────────────────────────────
@@ -729,6 +733,70 @@ class PipelineOrchestrator:
                     fingerprint=fingerprint,
                     failures_this_hour=failure_count,
                 )
+
+    async def _check_heartbeat_recovery(
+        self,
+        envelope: EventEnvelope,
+        session: AsyncSession,
+        result: PipelineResult,
+    ):
+        """Check if a successful heartbeat resolves an open heartbeat incident.
+
+        When HEARTBEAT_SUCCESS arrives for a project with an open heartbeat incident,
+        mark the incident as recovered (transition to TRIAGING for human verification).
+        Historical failure evidence remains immutable.
+        """
+        from sqlalchemy import select, func
+
+        project_id = envelope.project_id
+        payload = envelope.payload or {}
+        target_id = payload.get("target_id", "unknown")
+        target_url = payload.get("target_url", "unknown")
+
+        # Generate the same deterministic fingerprint used during incident creation
+        import hashlib
+        fingerprint_input = f"heartbeat:{project_id}:{target_id}"
+        fingerprint = hashlib.sha256(fingerprint_input.encode()).hexdigest()[:16]
+
+        # Find open heartbeat incidents for this fingerprint
+        existing_incident = await session.execute(
+            select(Incident).where(
+                Incident.project_id == project_id,
+                Incident.fingerprint == fingerprint,
+                Incident.status.notin_([IncidentStatus.RESOLVED, IncidentStatus.REMEDIATION_FAILED, IncidentStatus.ESCALATED]),
+            )
+        )
+        incident = existing_incident.scalar_one_or_none()
+
+        if incident:
+            # Record recovery metadata (immutable — does not overwrite failure evidence)
+            incident.metadata_ = {
+                **incident.metadata_,
+                "last_recovery": {
+                    "target_id": target_id,
+                    "target_url": target_url,
+                    "timestamp": envelope.occurred_at.isoformat(),
+                },
+            }
+            incident.updated_at = datetime.now(timezone.utc)
+
+            # Transition to TRIAGING (human verifies the recovery)
+            try:
+                await incident_engine.transition(
+                    incident.id, IncidentStatus.TRIAGING, session,
+                    details={"recovery_event_id": str(result.event.id) if result.event else None},
+                )
+                result.incident = incident
+                result.actions_taken.append("heartbeat_incident_recovery")
+                logger.info(
+                    "pipeline_heartbeat_incident_recovery",
+                    incident_id=str(incident.id),
+                    target_url=target_url,
+                )
+            except ValueError:
+                # Already in TRIAGING or later — just update metadata
+                result.incident = incident
+                result.actions_taken.append("heartbeat_recovery_metadata_updated")
 
     async def _audit_pipeline_run(
         self,

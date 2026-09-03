@@ -32,7 +32,7 @@ export default function Incidents() {
     finally { setLoading(false) }
   }
 
-  const statuses = ['DETECTED', 'TRIAGING', 'INVESTIGATING', 'DIAGNOSED', 'AWAITING_ACTION', 'REMEDIATING', 'VERIFYING', 'RESOLVED', 'ESCALATED']
+  const statuses = ['DETECTED', 'TRIAGING', 'INVESTIGATING', 'DIAGNOSED', 'AWAITING_ACTION', 'REMEDIATING', 'VERIFYING', 'RESOLVED', 'REMEDIATION_FAILED', 'ESCALATED']
 
   return (
     <div>
@@ -82,15 +82,15 @@ export default function Incidents() {
               <th>Title</th>
               <th>Service</th>
               <th>Confidence</th>
-              <th>Blast Radius</th>
               <th>Detected</th>
+              <th>Resolved</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>Loading...</td></tr>
             ) : incidents.length === 0 ? (
-              <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No incidents found</td></tr>
+              <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No incidents - system healthy</td></tr>
             ) : (
               incidents.map(inc => (
                 <tr key={inc.id} style={{ cursor: 'pointer' }} onClick={() => window.location.href = `/incidents/${inc.id}`}>
@@ -99,9 +99,11 @@ export default function Incidents() {
                   <td>{inc.title || inc.fingerprint || '—'}</td>
                   <td className="mono" style={{ fontSize: '12px' }}>{inc.affected_service || '—'}</td>
                   <td className="mono">{inc.confidence != null ? `${(inc.confidence * 100).toFixed(0)}%` : '—'}</td>
-                  <td><span className={`severity-badge ${inc.blast_radius || 'low'}`}>{inc.blast_radius || '—'}</span></td>
                   <td style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
                     {inc.detected_at ? formatDistanceToNow(new Date(inc.detected_at), { addSuffix: true }) : ''}
+                  </td>
+                  <td style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+                    {inc.resolved_at ? formatDistanceToNow(new Date(inc.resolved_at), { addSuffix: true }) : '—'}
                   </td>
                 </tr>
               ))
