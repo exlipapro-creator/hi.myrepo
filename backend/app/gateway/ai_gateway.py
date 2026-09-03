@@ -390,9 +390,11 @@ class AIGateway:
                     from app.security.auth import decrypt_secret
                     try:
                         api_key = decrypt_secret(db_provider.api_key_encrypted)
-                    except Exception:
+                    except Exception as decrypt_err:
+                        logger.warning("provider_key_decrypt_failed", provider=provider_name, error=str(decrypt_err))
                         continue
             if not api_key:
+                logger.warning("provider_no_api_key", provider=provider_name)
                 continue
 
             # Skip providers that don't support the requested model
@@ -438,6 +440,7 @@ class AIGateway:
                 cb.record_failure()
                 last_error = e
                 cascade_count += 1
+                logger.warning("provider_request_failed", provider=provider_name, error=str(e), error_type=type(e).__name__)
 
         raise ValueError(f"All AI providers failed after {cascade_count} cascades. Last error: {last_error}")
 
