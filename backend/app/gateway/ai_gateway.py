@@ -477,7 +477,12 @@ class AIGateway:
                 continue
             api_key = getattr(settings, config["api_key_env"], "")
             if not api_key:
-                continue
+                # Check if provider has encrypted key in database
+                db_prov = providers.get(name)
+                if db_prov and db_prov.api_key_encrypted:
+                    api_key = "db_encrypted"  # Signal that key exists in DB
+                else:
+                    continue
             if required_capabilities:
                 provider_caps = set(config.get("capabilities", []))
                 if not set(required_capabilities).issubset(provider_caps):
