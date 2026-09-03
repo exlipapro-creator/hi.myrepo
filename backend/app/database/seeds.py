@@ -141,7 +141,7 @@ async def seed_ai_providers(session: AsyncSession) -> int:
             "name": "groq",
             "api_key_env": "groq_api_key",
             "capabilities": ["text", "speed", "code"],
-            "models": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
+            "models": ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "openai/gpt-oss-20b"],
         },
     ]
 
