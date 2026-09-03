@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { formatDistanceToNow } from 'date-fns'
+import { Radio } from 'lucide-react'
 import { apiUrl } from '../utils/api.js'
 
 const API = apiUrl('/api/v1')
@@ -42,7 +43,7 @@ export default function Events() {
   return (
     <div>
       <div className="page-header">
-        <h1>📡 Event Explorer</h1>
+        <h1><Radio size={20} style={{ verticalAlign: 'middle', marginRight: '8px' }} />Event Explorer</h1>
         <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
           <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={{
             background: 'var(--bg-elevated)', border: '1px solid var(--border-primary)',
@@ -92,7 +93,7 @@ export default function Events() {
         </div>
       )}
 
-      <div className="card">
+      <div className="card" style={{ overflowX: 'auto' }}>
         <div className="event-stream">
           {loading ? (
             <div style={{ padding: 'var(--space-md)', textAlign: 'center', color: 'var(--text-muted)' }}>Loading...</div>

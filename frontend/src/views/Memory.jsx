@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Brain, Search } from 'lucide-react'
 import { apiUrl } from '../utils/api.js'
 
 const API = apiUrl('/api/v1')
@@ -37,12 +38,12 @@ export default function Memory() {
   return (
     <div>
       <div className="page-header">
-        <h1>🧠 Memory</h1>
+        <h1><Brain size={20} style={{ verticalAlign: 'middle', marginRight: '8px' }} />Memory</h1>
       </div>
 
       {/* Search */}
       <div className="card" style={{ marginBottom: 'var(--space-lg)' }}>
-        <div style={{ display: 'flex', gap: 'var(--space-sm)', alignItems: 'flex-end' }}>
+        <div className="memory-search" style={{ display: 'flex', gap: 'var(--space-sm)', alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <div style={{ flex: 1 }}>
             <div className="metric-label" style={{ marginBottom: '4px' }}>Fingerprint</div>
             <input

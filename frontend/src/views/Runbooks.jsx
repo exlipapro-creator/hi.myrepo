@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { BookOpen } from 'lucide-react'
 import { apiUrl } from '../utils/api.js'
 
 const API = apiUrl('/api/v1')
@@ -25,11 +26,11 @@ export default function Runbooks() {
   return (
     <div>
       <div className="page-header">
-        <h1>📋 Runbooks</h1>
+        <h1><BookOpen size={20} style={{ verticalAlign: 'middle', marginRight: '8px' }} />Runbooks</h1>
       </div>
 
       <div className="card">
-        <table>
+        <table className="responsive-table">
           <thead>
             <tr>
               <th>Code</th>
@@ -52,20 +53,20 @@ export default function Runbooks() {
             ) : (
               runbooks.map(r => (
                 <tr key={r.id}>
-                  <td className="mono" style={{ fontWeight: 600, color: 'var(--accent-cyan)' }}>{r.code}</td>
-                  <td>{r.name}</td>
-                  <td>
+                  <td data-label="Code" className="mono" style={{ fontWeight: 600, color: 'var(--accent-cyan)' }}>{r.code}</td>
+                  <td data-label="Name">{r.name}</td>
+                  <td data-label="Status">
                     <span className={`status-badge ${r.status === 'ACTIVE' ? 'healthy' : 'degraded'}`}>
                       {r.status}
                     </span>
                   </td>
-                  <td style={{ color: r.is_reversible ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                  <td data-label="Reversible" style={{ color: r.is_reversible ? 'var(--accent-green)' : 'var(--accent-red)' }}>
                     {r.is_reversible ? 'Yes' : 'No'}
                   </td>
-                  <td><span className={`severity-badge ${r.max_blast_radius}`}>{r.max_blast_radius}</span></td>
-                  <td className="mono">Level {r.required_autonomy_level}</td>
-                  <td className="mono" style={{ color: 'var(--accent-green)' }}>{r.historical_success_count}</td>
-                  <td className="mono" style={{ color: r.historical_failure_count > 0 ? 'var(--accent-red)' : 'var(--text-secondary)' }}>
+                  <td data-label="Blast Radius"><span className={`severity-badge ${r.max_blast_radius}`}>{r.max_blast_radius}</span></td>
+                  <td data-label="Min Autonomy" className="mono">Level {r.required_autonomy_level}</td>
+                  <td data-label="Successes" className="mono" style={{ color: 'var(--accent-green)' }}>{r.historical_success_count}</td>
+                  <td data-label="Failures" className="mono" style={{ color: r.historical_failure_count > 0 ? 'var(--accent-red)' : 'var(--text-secondary)' }}>
                     {r.historical_failure_count}
                   </td>
                 </tr>

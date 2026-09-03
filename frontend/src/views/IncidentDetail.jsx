@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { formatDistanceToNow } from 'date-fns'
+import { AlertTriangle, Radio, Bot, Play, CheckCircle, Check, ArrowLeft, Shield } from 'lucide-react'
 import { apiUrl } from '../utils/api.js'
 
 const API = apiUrl('/api/v1')
@@ -11,13 +12,13 @@ function authHeaders() {
 }
 
 function TimelineEntry({ entry }) {
-  const icons = {
-    incident_detected: '🔥',
-    event: '📡',
-    council_analysis: '🤖',
-    runbook_execution: '📋',
-    verification: '✅',
-    incident_resolved: '🟢',
+  const iconComponents = {
+    incident_detected: AlertTriangle,
+    event: Radio,
+    council_analysis: Bot,
+    runbook_execution: Play,
+    verification: CheckCircle,
+    incident_resolved: Check,
   }
 
   const colors = {
@@ -29,13 +30,15 @@ function TimelineEntry({ entry }) {
     incident_resolved: 'var(--accent-green)',
   }
 
+  const IconComponent = iconComponents[entry.type]
+
   return (
     <div style={{
       display: 'flex', gap: 'var(--space-md)', padding: 'var(--space-sm) 0',
       borderBottom: '1px solid var(--border-subtle)',
     }}>
-      <div style={{ fontSize: '18px', minWidth: '28px', textAlign: 'center' }}>
-        {icons[entry.type] || '📌'}
+      <div style={{ minWidth: '28px', textAlign: 'center', color: colors[entry.type] || 'var(--text-muted)' }}>
+        {IconComponent ? <IconComponent size={18} /> : <span style={{ fontSize: '14px' }}>•</span>}
       </div>
       <div style={{ flex: 1 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -98,7 +101,7 @@ export default function IncidentDetail() {
       <div className="page-header">
         <div>
           <Link to="/incidents" style={{ color: 'var(--accent-blue)', textDecoration: 'none', fontSize: '12px' }}>
-            ← Back to Incidents
+            <ArrowLeft size={14} style={{ verticalAlign: 'middle' }} /> Back to Incidents
           </Link>
           <h1 style={{ marginTop: '4px' }}>
             <span className={`severity-badge ${inc.severity}`} style={{ marginRight: 'var(--space-sm)' }}>{inc.severity}</span>
@@ -148,11 +151,11 @@ export default function IncidentDetail() {
       )}
 
       {/* Timeline + Sidebar */}
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 'var(--space-md)' }}>
+      <div className="detail-layout" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 'var(--space-md)' }}>
         {/* Timeline */}
         <div className="card">
           <div className="card-header">
-            <span className="card-title">TIMELINE ({timeline.length} events)</span>
+            <span className="card-title">TIMELINE ({timeline.length} entries)</span>
           </div>
           <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
             {timeline.length === 0 ? (

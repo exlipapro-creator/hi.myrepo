@@ -1,10 +1,15 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Activity, AlertTriangle, CheckCircle, Clock, Zap } from 'lucide-react'
+import { Activity, AlertTriangle, CheckCircle, Clock, Zap, Eye, Brain, Play, RefreshCw } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { apiUrl } from '../utils/api.js'
 
 const API = apiUrl('/api/v1')
+
+function authHeaders() {
+  const token = localStorage.getItem('token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
 
 export default function Dashboard() {
   const navigate = useNavigate()
@@ -25,7 +30,7 @@ export default function Dashboard() {
         fetch(`${API}/projects`, { headers: authHeaders() }),
         fetch(`${API}/incidents?limit=10`, { headers: authHeaders() }),
         fetch(`${API}/events?limit=20`, { headers: authHeaders() }),
-        fetch(apiUrl('/v1/providers'), { headers: authHeaders() }),
+        fetch(`${API}/providers`, { headers: authHeaders() }),
         fetch(`${API}/runbooks`, { headers: authHeaders() }),
       ])
 
@@ -52,11 +57,6 @@ export default function Dashboard() {
     }
   }
 
-  function authHeaders() {
-    const token = localStorage.getItem('token')
-    return token ? { Authorization: `Bearer ${token}` } : {}
-  }
-
   const activeIncidents = Array.isArray(incidents) ? incidents.filter(i => i.status !== 'RESOLVED') : []
   const criticalCount = activeIncidents.filter(i => i.severity === 'critical').length
   const healthyProviders = providers.filter(p => p.status === 'healthy').length
@@ -79,7 +79,7 @@ export default function Dashboard() {
           border: '1px solid rgba(59, 130, 246, 0.2)',
         }}>
           <div style={{ textAlign: 'center', padding: 'var(--space-lg)' }}>
-            <div style={{ fontSize: '32px', marginBottom: 'var(--space-md)' }}>🎯</div>
+            <div style={{ marginBottom: 'var(--space-md)', color: 'var(--accent-blue)' }}><Activity size={32} /></div>
             <h2 style={{ fontSize: '20px', fontWeight: 700, marginBottom: 'var(--space-sm)' }}>
               Welcome to hi.myrepo
             </h2>
@@ -133,15 +133,15 @@ export default function Dashboard() {
           <div className="card-header">
             <span className="card-title">HOW IT WORKS</span>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-md)', padding: 'var(--space-sm)' }}>
+          <div className="bento-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', padding: 'var(--space-sm)' }}>
             {[
-              { icon: '📡', title: 'Observe', desc: 'Ingest events, heartbeats, and telemetry from your systems' },
-              { icon: '🤖', title: 'Understand', desc: 'AI analyzes patterns, correlates events, and identifies root causes' },
-              { icon: '📋', title: 'Act', desc: 'Propose and approve runbook executions for remediation' },
-              { icon: '🔄', title: 'Autonomy', desc: 'Progressively grant the system more authority as trust builds' },
+              { icon: <Eye size={24} />, title: 'Observe', desc: 'Ingest events, heartbeats, and telemetry from your systems' },
+              { icon: <Brain size={24} />, title: 'Understand', desc: 'AI analyzes patterns, correlates events, and identifies root causes' },
+              { icon: <Play size={24} />, title: 'Act', desc: 'Propose and approve runbook executions for remediation' },
+              { icon: <RefreshCw size={24} />, title: 'Autonomy', desc: 'Progressively grant the system more authority as trust builds' },
             ].map((step, i) => (
               <div key={i} style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '24px', marginBottom: 'var(--space-sm)' }}>{step.icon}</div>
+                <div style={{ marginBottom: 'var(--space-sm)', color: 'var(--accent-blue)' }}>{step.icon}</div>
                 <div style={{ fontWeight: 600, fontSize: '14px', marginBottom: '4px' }}>{step.title}</div>
                 <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{step.desc}</div>
               </div>
@@ -187,7 +187,7 @@ export default function Dashboard() {
       </div>
 
       {/* ── Projects + Event Spine ──────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-md)' }}>
+      <div className="grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-md)' }}>
         {/* Projects */}
         <div className="card">
           <div className="card-header">
@@ -222,7 +222,7 @@ export default function Dashboard() {
                   </div>
                   <span className="status-badge healthy">
                     <span className="status-dot healthy"></span>
-                    {p.is_active ? 'ACTIVE' : 'INACTIVE'}
+                    {p.monitoring_status === 'active' ? 'MONITORING' : 'STOPPED'}
                   </span>
                 </div>
               ))}
@@ -268,7 +268,7 @@ export default function Dashboard() {
               View All →
             </button>
           </div>
-          <table>
+          <table className="responsive-table">
             <thead>
               <tr>
                 <th>Severity</th>
@@ -282,12 +282,12 @@ export default function Dashboard() {
             <tbody>
               {activeIncidents.map(inc => (
                 <tr key={inc.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/incidents/${inc.id}`)}>
-                  <td><span className={`severity-badge ${inc.severity}`}>{inc.severity}</span></td>
-                  <td className="mono" style={{ fontSize: '12px' }}>{inc.status}</td>
-                  <td>{inc.title || inc.fingerprint || 'Unknown'}</td>
-                  <td className="mono" style={{ fontSize: '12px' }}>{inc.affected_service || '—'}</td>
-                  <td className="mono">{inc.confidence != null ? `${(inc.confidence * 100).toFixed(0)}%` : '—'}</td>
-                  <td style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+                  <td data-label="Severity"><span className={`severity-badge ${inc.severity}`}>{inc.severity}</span></td>
+                  <td data-label="Status" className="mono" style={{ fontSize: '12px' }}>{inc.status}</td>
+                  <td data-label="Title">{inc.title || inc.fingerprint || 'Unknown'}</td>
+                  <td data-label="Service" className="mono" style={{ fontSize: '12px' }}>{inc.affected_service || '—'}</td>
+                  <td data-label="Confidence" className="mono">{inc.confidence != null ? `${(inc.confidence * 100).toFixed(0)}%` : '—'}</td>
+                  <td data-label="Detected" style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
                     {inc.detected_at ? formatDistanceToNow(new Date(inc.detected_at), { addSuffix: true }) : ''}
                   </td>
                 </tr>

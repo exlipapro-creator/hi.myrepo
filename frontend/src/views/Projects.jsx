@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { formatDistanceToNow } from 'date-fns'
+import { Plus, X, Play, Square, Package, Target, Settings, ExternalLink, ArrowLeft } from 'lucide-react'
 import { apiUrl } from '../utils/api.js'
 
 const API = apiUrl('/api/v1')
@@ -100,8 +101,7 @@ function CreateProjectForm({ onCreated, onCancel }) {
           {error}
         </div>
       )}
-      <form onSubmit={handleSubmit}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-md)' }}>
+      <form onSubmit={handleSubmit}>          <div className="grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-md)' }}>
           <div>
             <label style={labelStyle}>Project Name *</label>
             <input
@@ -358,7 +358,7 @@ function MonitoredTargets({ projectId }) {
       {showAdd && (
         <form onSubmit={editing ? handleUpdate : handleAdd} style={{ padding: 'var(--space-sm)', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', marginBottom: 'var(--space-md)' }}>
           {error && <div style={{ padding: '6px 10px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-red)', fontSize: '12px', marginBottom: 'var(--space-sm)' }}>{error}</div>}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 1fr', gap: 'var(--space-sm)' }}>
+          <div className="target-form-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 1fr', gap: 'var(--space-sm)' }}>
             <div>
               <label style={labelStyle}>Name</label>
               <input type="text" required value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} placeholder="Production API" style={inputStyle} />
@@ -445,8 +445,7 @@ function ProjectDetail({ project, health, onBack, onMonitoringChange }) {
   }
 
   return (
-    <div>
-      <div className="page-header">
+    <div>      <div className="page-header">
         <div>
           <button
             onClick={onBack}
@@ -455,7 +454,7 @@ function ProjectDetail({ project, health, onBack, onMonitoringChange }) {
               cursor: 'pointer', fontSize: '12px', padding: 0, marginBottom: '4px',
             }}
           >
-            ← Back to Projects
+            <ArrowLeft size={14} style={{ verticalAlign: 'middle' }} /> Back to Projects
           </button>
           <h1>
             {project.name}
@@ -476,7 +475,7 @@ function ProjectDetail({ project, health, onBack, onMonitoringChange }) {
               color: isMonitoring ? 'var(--accent-red)' : 'var(--accent-green)',
             }}
           >
-            {monitoringLoading ? '...' : isMonitoring ? '⏹ Stop Monitoring' : '▶ Start Monitoring'}
+            {monitoringLoading ? '...' : isMonitoring ? <><Square size={14} /> Stop Monitoring</> : <><Play size={14} /> Start Monitoring</>}
           </button>
           <span className="mono" style={{
             fontSize: '11px', padding: '3px 8px', borderRadius: '4px',
@@ -707,12 +706,12 @@ export default function Projects() {
   return (
     <div>
       <div className="page-header">
-        <h1>📦 Projects</h1>
+        <h1><Package size={20} style={{ verticalAlign: 'middle', marginRight: '8px' }} />Projects</h1>
         <button
           className="btn btn-primary"
           onClick={() => setShowCreate(!showCreate)}
         >
-          {showCreate ? '✕ Cancel' : '+ Create Project'}
+          {showCreate ? <><X size={14} /> Cancel</> : <><Plus size={14} /> Create Project</>}
         </button>
       </div>
 
@@ -739,11 +738,11 @@ export default function Projects() {
             Create your first project to begin observing your systems.
           </p>
           <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
-            + Create Your First Project
+            <Plus size={14} /> Create Your First Project
           </button>
         </div>
       ) : (
-        <div className="bento-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
+        <div className="bento-grid project-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
           {projects.map(p => (
             <ProjectCard
               key={p.id}

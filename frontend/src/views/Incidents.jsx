@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { formatDistanceToNow } from 'date-fns'
+import { AlertTriangle } from 'lucide-react'
 import { apiUrl } from '../utils/api.js'
 
 const API = apiUrl('/api/v1')
@@ -37,7 +38,7 @@ export default function Incidents() {
   return (
     <div>
       <div className="page-header">
-        <h1>🔥 Incidents</h1>
+        <h1><AlertTriangle size={20} style={{ verticalAlign: 'middle', marginRight: '8px' }} />Incidents</h1>
         <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
           <select
             value={filter}
@@ -73,8 +74,7 @@ export default function Incidents() {
       )}
 
       {/* Table */}
-      <div className="card">
-        <table>
+      <div className="card">          <table className="responsive-table">
           <thead>
             <tr>
               <th>Severity</th>
@@ -94,15 +94,15 @@ export default function Incidents() {
             ) : (
               incidents.map(inc => (
                 <tr key={inc.id} style={{ cursor: 'pointer' }} onClick={() => window.location.href = `/incidents/${inc.id}`}>
-                  <td><span className={`severity-badge ${inc.severity}`}>{inc.severity}</span></td>
-                  <td className="mono" style={{ fontSize: '12px' }}>{inc.status}</td>
-                  <td>{inc.title || inc.fingerprint || '—'}</td>
-                  <td className="mono" style={{ fontSize: '12px' }}>{inc.affected_service || '—'}</td>
-                  <td className="mono">{inc.confidence != null ? `${(inc.confidence * 100).toFixed(0)}%` : '—'}</td>
-                  <td style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+                  <td data-label="Severity"><span className={`severity-badge ${inc.severity}`}>{inc.severity}</span></td>
+                  <td data-label="Status" className="mono" style={{ fontSize: '12px' }}>{inc.status}</td>
+                  <td data-label="Title">{inc.title || inc.fingerprint || '—'}</td>
+                  <td data-label="Service" className="mono" style={{ fontSize: '12px' }}>{inc.affected_service || '—'}</td>
+                  <td data-label="Confidence" className="mono">{inc.confidence != null ? `${(inc.confidence * 100).toFixed(0)}%` : '—'}</td>
+                  <td data-label="Detected" style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
                     {inc.detected_at ? formatDistanceToNow(new Date(inc.detected_at), { addSuffix: true }) : ''}
                   </td>
-                  <td style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+                  <td data-label="Resolved" style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
                     {inc.resolved_at ? formatDistanceToNow(new Date(inc.resolved_at), { addSuffix: true }) : '—'}
                   </td>
                 </tr>

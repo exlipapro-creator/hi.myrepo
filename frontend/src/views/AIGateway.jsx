@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
+import { Bot, Plus, X } from 'lucide-react'
 import { apiUrl } from '../utils/api.js'
 
-const API = apiUrl('/v1')
 const API_V1 = apiUrl('/api/v1')
 
 function authHeaders() {
@@ -378,10 +378,10 @@ export default function AIGateway() {
   return (
     <div>
       <div className="page-header">
-        <h1>🤖 AI Gateway</h1>
+        <h1><Bot size={20} style={{ verticalAlign: 'middle', marginRight: '8px' }} />AI Gateway</h1>
         {isAdmin && (
           <button className="btn btn-primary" onClick={() => setShowAdd(!showAdd)}>
-            {showAdd ? '✕ Cancel' : '+ Add Provider'}
+            {showAdd ? <><X size={14} /> Cancel</> : <><Plus size={14} /> Add Provider</>}
           </button>
         )}
       </div>
@@ -434,7 +434,7 @@ export default function AIGateway() {
       )}
 
       {/* Provider Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 'var(--space-md)' }}>
+      <div className="bento-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
         {loading ? (
           <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 'var(--space-lg)' }}>
             Loading providers...
