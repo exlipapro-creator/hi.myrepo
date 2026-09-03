@@ -65,6 +65,17 @@ export default function App() {
     setSidebarOpen(false)
   }, [location.pathname])
 
+  // Close sidebar on Escape key
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.key === 'Escape' && sidebarOpen) {
+        setSidebarOpen(false)
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [sidebarOpen])
+
   function handleLogin(newToken) {
     setToken(newToken)
   }

@@ -419,14 +419,16 @@ tr:hover td {
     display: flex;
   }
 
+  /* Sidebar as off-canvas drawer — hidden when closed */
   .sidebar {
-    transform: translateX(-100%);
+    display: none;
+    width: 260px;
     transition: transform 0.2s ease;
     z-index: 11;
-    width: 240px;
   }
 
   .sidebar.open {
+    display: flex;
     transform: translateX(0);
   }
 
@@ -434,10 +436,18 @@ tr:hover td {
     display: block;
   }
 
+  /* Main content fills full viewport — no sidebar margin */
   .main-content {
-    margin-left: 0;
+    margin-left: 0 !important;
     padding: var(--space-md);
     padding-top: var(--space-sm);
+    width: 100% !important;
+    max-width: 100vw !important;
+  }
+
+  /* Prevent any horizontal overflow from sidebar drawer */
+  .app {
+    overflow-x: hidden;
   }
 
   .page-header {
