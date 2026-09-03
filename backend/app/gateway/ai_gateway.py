@@ -385,13 +385,18 @@ class AIGateway:
             api_key = getattr(self._settings, config["api_key_env"], "")
             if not api_key:
                 # Read from encrypted provider record in database
-                db_provider = providers.get(provider_name)
-                if db_provider and db_provider.api_key_encrypted:
-                    from app.security.auth import decrypt_secret
-                    try:
-                        api_key = decrypt_secret(db_provider.api_key_encrypted)
-                    except Exception:
-                        continue
+                try:
+                    from app.database.connection import db_manager
+                    async with db_manager.get_session() as db_session:
+                        result = await db_session.execute(
+                            select(AIProvider).where(AIProvider.name == provider_name)
+                        )
+                        db_provider = result.scalar_one_or_none()
+                        if db_provider and db_provider.api_key_encrypted:
+                            from app.security.auth import decrypt_secret
+                            api_key = decrypt_secret(db_provider.api_key_encrypted)
+                except Exception:
+                    pass
             if not api_key:
                 continue
 
@@ -474,7 +479,10 @@ class AIGateway:
                 continue
             api_key = getattr(settings, config["api_key_env"], "")
             if not api_key:
-                continue
+                # Also check if provider has encrypted key in database
+                db_prov = providers.get(name)
+                if not (db_prov and db_prov.api_key_encrypted):
+                    continue
             if required_capabilities:
                 provider_caps = set(config.get("capabilities", []))
                 if not set(required_capabilities).issubset(provider_caps):
