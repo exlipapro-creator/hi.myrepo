@@ -58,15 +58,17 @@ async def get_incident_full(
         # Verify project access
         await require_project_access(incident.project_id, user)
 
-        # Get related events
+        # Get related events — match by project + correlation_id or incident_id
+        event_filters = [Event.project_id == incident.project_id]
+        if incident.correlation_id:
+            event_filters.append(Event.correlation_id == incident.correlation_id)
+        if incident.id:
+            event_filters.append(Event.incident_id == incident.id)
+        from sqlalchemy import or_
         events_result = await session.execute(
             select(Event)
             .where(Event.project_id == incident.project_id)
-            .where(
-                (Event.correlation_id == incident.correlation_id) |
-                (Event.fingerprint == incident.fingerprint) if incident.fingerprint
-                else (Event.correlation_id == incident.correlation_id)
-            )
+            .where(or_(*event_filters) if len(event_filters) > 1 else event_filters[0])
             .order_by(Event.received_at.desc())
             .limit(100)
         )

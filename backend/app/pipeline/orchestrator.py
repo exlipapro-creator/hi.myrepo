@@ -786,17 +786,12 @@ class PipelineOrchestrator:
         # for this project+target prefix
 
         # Find open heartbeat incidents for this target.
-        # Use exact fingerprint match (failure-class-specific) first.
-        # Fall back to broad fingerprint for backward compatibility.
-        # NEVER use prefix match — it can recover the wrong incident.
-        from sqlalchemy import or_
+        # Match by affected_component (target_url) which is set during incident creation.
+        # This correctly matches any failure-class-specific fingerprint for this target.
         existing_incident = await session.execute(
             select(Incident).where(
                 Incident.project_id == project_id,
-                or_(
-                    Incident.fingerprint == fingerprint,
-                    Incident.fingerprint == f"heartbeat:{project_id}:{target_id}",
-                ),
+                Incident.affected_component == target_url,
                 Incident.status.notin_([IncidentStatus.RESOLVED, IncidentStatus.REMEDIATION_FAILED, IncidentStatus.ESCALATED]),
             )
         )
