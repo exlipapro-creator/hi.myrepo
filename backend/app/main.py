@@ -77,6 +77,20 @@ async def lifespan(app: FastAPI):
                         "ALTER TABLE ai_providers ADD COLUMN configured_at TIMESTAMPTZ"
                     ))
                     logger.info("migration_provider_encryption_added")
+
+                # Check and add recovery verification columns if missing
+                check3 = await session.execute(text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='incidents' AND column_name='recovery_success_count'"
+                ))
+                if not check3.scalar():
+                    await session.execute(text(
+                        "ALTER TABLE incidents ADD COLUMN recovery_success_count INTEGER NOT NULL DEFAULT 0"
+                    ))
+                    await session.execute(text(
+                        "ALTER TABLE incidents ADD COLUMN recovery_verification_started_at TIMESTAMPTZ"
+                    ))
+                    logger.info("migration_recovery_verification_added")
         except Exception as e:
             logger.warning("schema_migration_error", error=str(e))
 

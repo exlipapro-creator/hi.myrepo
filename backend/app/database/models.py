@@ -349,6 +349,10 @@ class Incident(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
 
+    # Recovery tracking (Phase I-I)
+    recovery_success_count: Mapped[int] = mapped_column(Integer, default=0)
+    recovery_verification_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Relationships
     project: Mapped["Project"] = relationship(back_populates="incidents")
     events: Mapped[list["Event"]] = relationship(back_populates="incident")

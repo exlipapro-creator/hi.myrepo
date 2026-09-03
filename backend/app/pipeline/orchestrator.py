@@ -662,12 +662,14 @@ class PipelineOrchestrator:
         target_id = payload.get("target_id", "unknown")
         target_url = payload.get("target_url", "unknown")
 
-        # Count recent heartbeat failures
+        # Count recent heartbeat failures for this specific target
+        # (prevents different targets' failures from collapsing into one count)
         failure_count_result = await session.execute(
             select(func.count()).where(
                 Event.project_id == project_id,
                 Event.event_type.in_(["HEARTBEAT_FAILURE", "HEARTBEAT_DEGRADED"]),
                 Event.received_at >= datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0),
+                Event.payload["target_id"].astext == target_id,
             )
         )
         failure_count = failure_count_result.scalar() or 0
@@ -682,8 +684,12 @@ class PipelineOrchestrator:
             )
 
             # Generate a deterministic fingerprint for this heartbeat target
+            # Include failure class to distinguish different failure modes:
+            # HTTP 500 vs 503 vs DNS vs TLS vs timeout
             import hashlib
-            fingerprint_input = f"heartbeat:{project_id}:{target_id}"
+            failure_class = payload.get("failure_class", "unknown")
+            status_code = payload.get("status_code", 0)
+            fingerprint_input = f"heartbeat:{project_id}:{target_id}:{failure_class}:{status_code}"
             fingerprint = hashlib.sha256(fingerprint_input.encode()).hexdigest()[:16]
 
             # Check if an open incident already exists for this fingerprint
@@ -754,22 +760,32 @@ class PipelineOrchestrator:
         target_url = payload.get("target_url", "unknown")
 
         # Generate the same deterministic fingerprint used during incident creation
+        # Note: recovery uses a broad fingerprint to match any failure class for this target
         import hashlib
         fingerprint_input = f"heartbeat:{project_id}:{target_id}"
         fingerprint = hashlib.sha256(fingerprint_input.encode()).hexdigest()[:16]
+        # Also check all failure-class-specific fingerprints by querying open incidents
+        # for this project+target prefix
 
-        # Find open heartbeat incidents for this fingerprint
+        # Find open heartbeat incidents for this target.
+        # The fingerprint now includes failure class, so we match by prefix.
+        # Also match the broad fingerprint for backward compatibility.
+        from sqlalchemy import or_
+        target_prefix = f"heartbeat:{project_id}:{target_id}"
         existing_incident = await session.execute(
             select(Incident).where(
                 Incident.project_id == project_id,
-                Incident.fingerprint == fingerprint,
+                or_(
+                    Incident.fingerprint.startswith(target_prefix),
+                    Incident.fingerprint == fingerprint,
+                ),
                 Incident.status.notin_([IncidentStatus.RESOLVED, IncidentStatus.REMEDIATION_FAILED, IncidentStatus.ESCALATED]),
             )
         )
         incident = existing_incident.scalar_one_or_none()
 
         if incident:
-            # Record recovery metadata (immutable — does not overwrite failure evidence)
+            # Record recovery metadata (immutable)
             incident.metadata_ = {
                 **incident.metadata_,
                 "last_recovery": {
@@ -780,23 +796,51 @@ class PipelineOrchestrator:
             }
             incident.updated_at = datetime.now(timezone.utc)
 
-            # Transition to TRIAGING (human verifies the recovery)
-            try:
-                await incident_engine.transition(
-                    incident.id, IncidentStatus.TRIAGING, session,
-                    details={"recovery_event_id": str(result.event.id) if result.event else None},
+            # Recovery verification window: require 3 consecutive successes
+            # before transitioning to TRIAGING (prevents flapping)
+            RECOVERY_VERIFICATION_THRESHOLD = 3
+            incident.recovery_success_count = (incident.recovery_success_count or 0) + 1
+
+            if incident.recovery_verification_started_at is None:
+                incident.recovery_verification_started_at = datetime.now(timezone.utc)
+
+            if incident.recovery_success_count >= RECOVERY_VERIFICATION_THRESHOLD:
+                # Stable recovery confirmed - transition to TRIAGING
+                try:
+                    await incident_engine.transition(
+                        incident.id, IncidentStatus.TRIAGING, session,
+                        details={
+                            "recovery_event_id": str(result.event.id) if result.event else None,
+                            "recovery_verification": {
+                                "successes_required": RECOVERY_VERIFICATION_THRESHOLD,
+                                "successes_observed": incident.recovery_success_count,
+                                "verification_started_at": incident.recovery_verification_started_at.isoformat() if incident.recovery_verification_started_at else None,
+                            },
+                        },
+                    )
+                    result.incident = incident
+                    result.actions_taken.append("heartbeat_incident_recovery")
+                    logger.info(
+                        "pipeline_heartbeat_incident_recovery",
+                        incident_id=str(incident.id),
+                        target_url=target_url,
+                        successes=incident.recovery_success_count,
+                    )
+                except ValueError:
+                    result.incident = incident
+                    result.actions_taken.append("heartbeat_recovery_metadata_updated")
+            else:
+                # Still in verification window
+                result.actions_taken.append(
+                    f"heartbeat_recovery_in_progress:{incident.recovery_success_count}/{RECOVERY_VERIFICATION_THRESHOLD}"
                 )
                 result.incident = incident
-                result.actions_taken.append("heartbeat_incident_recovery")
                 logger.info(
-                    "pipeline_heartbeat_incident_recovery",
+                    "pipeline_heartbeat_recovery_in_progress",
                     incident_id=str(incident.id),
-                    target_url=target_url,
+                    successes=incident.recovery_success_count,
+                    required=RECOVERY_VERIFICATION_THRESHOLD,
                 )
-            except ValueError:
-                # Already in TRIAGING or later — just update metadata
-                result.incident = incident
-                result.actions_taken.append("heartbeat_recovery_metadata_updated")
 
     async def _audit_pipeline_run(
         self,

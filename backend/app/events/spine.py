@@ -7,6 +7,7 @@ Every event is: immutable, timestamped, attributable, traceable,
 replayable, idempotent, correlation-aware.
 """
 
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -102,9 +103,15 @@ class EventProcessor:
         if envelope.received_at is None:
             envelope.received_at = datetime.now(timezone.utc)
         if envelope.idempotency_key is None:
+            # Include payload hash to distinguish truly identical events
+            # from events that happen to share type/source/project/timestamp
+            import hashlib as _hl
+            payload_bytes = json.dumps(envelope.payload, sort_keys=True, default=str).encode()
+            payload_hash = _hl.sha256(payload_bytes).hexdigest()[:8]
             envelope.idempotency_key = (
                 f"{envelope.event_type}:{envelope.source}:"
-                f"{envelope.project_id}:{envelope.occurred_at.isoformat()}"
+                f"{envelope.project_id}:{envelope.occurred_at.isoformat()}:"
+                f"{payload_hash}"
             )
 
         # Check idempotency — do not duplicate
