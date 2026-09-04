@@ -6,6 +6,7 @@ POST /events — ingest events
 GET /events — query events
 """
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -248,6 +249,70 @@ async def list_events(
             "offset": offset,
             "has_more": (offset + limit) < total,
         }
+
+
+@router.get("/aggregate")
+async def aggregate_events(
+    project_id: Optional[uuid.UUID] = None,
+    time_window: str = Query(default="1h", description="Aggregation window: 1h, 6h, 24h"),
+    user: TokenData = Depends(get_current_user),
+):
+    """Aggregate events into operational conditions for dashboard.
+    Groups repetitive events (e.g., HEARTBEAT_DEGRADED) into a single condition
+    with occurrence counts, first/last seen, and linked incident.
+    """
+    from datetime import timedelta
+    from sqlalchemy import func
+
+    if project_id:
+        await require_project_access(project_id, user)
+    else:
+        user_project_ids = await get_user_project_ids(user)
+        if not user_project_ids:
+            return {"conditions": [], "total": 0}
+
+    # Parse time window
+    window_map = {"1h": timedelta(hours=1), "6h": timedelta(hours=6), "24h": timedelta(hours=24)}
+    window_delta = window_map.get(time_window, timedelta(hours=1))
+    since = datetime.now(timezone.utc) - window_delta
+
+    async with db_manager.get_session() as session:
+        # Query events grouped by event_type + source, with counts
+        query = (
+            select(
+                Event.event_type,
+                Event.source,
+                Event.severity,
+                Event.project_id,
+                func.count().label("occurrence_count"),
+                func.min(Event.received_at).label("first_seen"),
+                func.max(Event.received_at).label("last_seen"),
+            )
+            .where(Event.received_at >= since)
+            .group_by(Event.event_type, Event.source, Event.severity, Event.project_id)
+            .order_by(func.count().desc())
+        )
+        if project_id:
+            query = query.where(Event.project_id == project_id)
+        else:
+            query = query.where(Event.project_id.in_(user_project_ids))
+
+        result = await session.execute(query)
+        rows = result.all()
+
+        conditions = []
+        for row in rows:
+            conditions.append({
+                "event_type": row.event_type,
+                "source": row.source,
+                "severity": row.severity,
+                "project_id": str(row.project_id),
+                "occurrence_count": row.occurrence_count,
+                "first_seen": row.first_seen.isoformat() if row.first_seen else None,
+                "last_seen": row.last_seen.isoformat() if row.last_seen else None,
+            })
+
+        return {"conditions": conditions, "total": len(conditions)}
 
 
 @router.get("/stats", response_model=EventStatsResponse)

@@ -6,14 +6,14 @@ Runbook management, proposal, approval, and execution tracking.
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.database.connection import db_manager
-from app.database.models import Runbook, RunbookExecution, RunbookStatus
+from app.database.models import Runbook, RunbookExecution, RunbookExecutionStatus, RunbookStatus
 from app.runbooks.engine import RunbookProposal, runbook_engine
-from app.security.auth import TokenData, get_current_user, require_incident_access
+from app.security.auth import TokenData, get_current_user, require_incident_access, get_user_project_ids
 
 router = APIRouter()
 
@@ -29,6 +29,19 @@ class RunbookResponse(BaseModel):
     max_blast_radius: str
     historical_success_count: int
     historical_failure_count: int
+
+
+class RunbookExecutionResponse(BaseModel):
+    id: str
+    runbook_id: str
+    incident_id: str
+    status: str
+    approved_by: str | None
+    approved_at: str | None
+    started_at: str | None
+    completed_at: str | None
+    error_message: str | None
+    created_at: str
 
 
 class RunbookApprovalRequest(BaseModel):
@@ -65,6 +78,61 @@ async def list_runbooks(
             )
             for r in runbooks
         ]
+
+
+@router.get("/executions")
+async def list_executions(
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: TokenData = Depends(get_current_user),
+):
+    """List runbook executions across the user's organization."""
+    user_project_ids = await get_user_project_ids(user)
+    if not user_project_ids:
+        return {"executions": [], "total": 0}
+
+    async with db_manager.get_session() as session:
+        from app.database.models import Incident
+        from sqlalchemy import func as sqlfunc
+
+        # Base query: executions for incidents belonging to user's projects
+        base = (
+            select(RunbookExecution)
+            .join(Incident, RunbookExecution.incident_id == Incident.id)
+            .where(Incident.project_id.in_(user_project_ids))
+        )
+        if status_filter:
+            base = base.where(RunbookExecution.status == status_filter)
+
+        count_q = select(sqlfunc.count()).select_from(base.subquery())
+        total = (await session.execute(count_q)).scalar() or 0
+
+        base = base.order_by(RunbookExecution.created_at.desc()).limit(limit).offset(offset)
+        result = await session.execute(base)
+        executions = result.scalars().all()
+
+        return {
+            "executions": [
+                {
+                    "id": str(e.id),
+                    "runbook_id": str(e.runbook_id),
+                    "incident_id": str(e.incident_id),
+                    "status": e.status,
+                    "approved_by": e.approved_by,
+                    "approved_at": e.approved_at.isoformat() if e.approved_at else None,
+                    "started_at": e.started_at.isoformat() if e.started_at else None,
+                    "completed_at": e.completed_at.isoformat() if e.completed_at else None,
+                    "error_message": e.error_message,
+                    "created_at": e.created_at.isoformat(),
+                }
+                for e in executions
+            ],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": (offset + limit) < total,
+        }
 
 
 @router.get("/{runbook_id}", response_model=RunbookResponse)

@@ -53,6 +53,22 @@ class IncidentStatsResponse(BaseModel):
     by_severity: dict[str, int]
 
 
+class IncidentListResponse(BaseModel):
+    incidents: list[IncidentResponse]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
+class IncidentListResponse(BaseModel):
+    incidents: list[IncidentResponse]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
 @router.post("", status_code=201)
 async def create_incident(
     req: IncidentCreate,
@@ -97,30 +113,42 @@ async def list_incidents(
         if severity:
             query = query.where(Incident.severity == severity)
 
-        query = query.order_by(Incident.detected_at.desc()).limit(limit).offset(offset)
+        query = query.order_by(Incident.detected_at.desc())
+
+        # Count total
+        count_q = select(func.count()).select_from(query.subquery())
+        total = (await session.execute(count_q)).scalar() or 0
+
+        query = query.limit(limit).offset(offset)
         result = await session.execute(query)
         incidents = result.scalars().all()
 
-        return [
-            IncidentResponse(
-                id=str(i.id),
-                project_id=str(i.project_id),
-                status=i.status,
-                severity=i.severity,
-                title=i.title,
-                summary=i.summary,
-                affected_service=i.affected_service,
-                affected_component=i.affected_component,
-                fingerprint=i.fingerprint,
-                confidence=i.confidence,
-                blast_radius=i.blast_radius,
-                root_cause=i.root_cause,
-                detected_at=i.detected_at.isoformat(),
-                resolved_at=i.resolved_at.isoformat() if i.resolved_at else None,
-                created_at=i.created_at.isoformat(),
-            )
-            for i in incidents
-        ]
+        return IncidentListResponse(
+            incidents=[
+                IncidentResponse(
+                    id=str(i.id),
+                    project_id=str(i.project_id),
+                    status=i.status,
+                    severity=i.severity,
+                    title=i.title,
+                    summary=i.summary,
+                    affected_service=i.affected_service,
+                    affected_component=i.affected_component,
+                    fingerprint=i.fingerprint,
+                    confidence=i.confidence,
+                    blast_radius=i.blast_radius,
+                    root_cause=i.root_cause,
+                    detected_at=i.detected_at.isoformat(),
+                    resolved_at=i.resolved_at.isoformat() if i.resolved_at else None,
+                    created_at=i.created_at.isoformat(),
+                )
+                for i in incidents
+            ],
+            total=total,
+            limit=limit,
+            offset=offset,
+            has_more=(offset + limit) < total,
+        )
 
 
 @router.get("/stats", response_model=IncidentStatsResponse)

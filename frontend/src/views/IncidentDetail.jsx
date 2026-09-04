@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { formatDistanceToNow } from 'date-fns'
-import { AlertTriangle, Radio, Bot, Play, CheckCircle, Check, ArrowLeft, Shield } from 'lucide-react'
+import { AlertTriangle, Radio, Bot, Play, CheckCircle, Check, ArrowLeft, Shield, RefreshCw, Loader } from 'lucide-react'
 import { apiUrl } from '../utils/api.js'
 
 const API = apiUrl('/api/v1')
@@ -70,6 +70,8 @@ export default function IncidentDetail() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [actionLoading, setActionLoading] = useState('')
+  const [actionMessage, setActionMessage] = useState('')
 
   useEffect(() => { loadIncident() }, [id])
 
@@ -90,11 +92,121 @@ export default function IncidentDetail() {
     }
   }
 
+  async function handleInvestigate() {
+    setActionLoading('investigate')
+    setActionMessage('')
+    try {
+      const res = await fetch(`${API}/incidents/${id}/investigate`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      })
+      if (res.ok) {
+        const result = await res.json()
+        setActionMessage(`Investigation complete — confidence: ${(result.confidence * 100).toFixed(0)}%`)
+        await loadIncident()
+      } else {
+        const err = await res.json().catch(() => ({}))
+        setActionMessage(`Investigation failed: ${err.detail || res.status}`)
+      }
+    } catch (e) {
+      setActionMessage('Network error during investigation')
+    } finally {
+      setActionLoading('')
+    }
+  }
+
+  async function handleApprove(executionId) {
+    setActionLoading(executionId)
+    setActionMessage('')
+    try {
+      const res = await fetch(`${API}/runbooks/${executionId}/approve`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approved_by: 'operator' }),
+      })
+      if (res.ok) {
+        setActionMessage('Execution approved')
+        await loadIncident()
+      } else {
+        const err = await res.json().catch(() => ({}))
+        setActionMessage(`Approval failed: ${err.detail || res.status}`)
+      }
+    } catch (e) {
+      setActionMessage('Network error during approval')
+    } finally {
+      setActionLoading('')
+    }
+  }
+
+  async function handleExecute(executionId) {
+    setActionLoading(executionId)
+    setActionMessage('')
+    try {
+      const res = await fetch(`${API}/runbooks/executions/${executionId}/execute`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      if (res.ok) {
+        const result = await res.json()
+        setActionMessage(result.success ? `Execution succeeded: ${result.message}` : `Execution failed: ${result.message}`)
+        await loadIncident()
+      } else {
+        const err = await res.json().catch(() => ({}))
+        setActionMessage(`Execution failed: ${err.detail || res.status}`)
+      }
+    } catch (e) {
+      setActionMessage('Network error during execution')
+    } finally {
+      setActionLoading('')
+    }
+  }
+
+  async function handleTransition(targetStatus) {
+    setActionLoading(`transition-${targetStatus}`)
+    setActionMessage('')
+    try {
+      const res = await fetch(`${API}/incidents/${id}/transition`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_status: targetStatus }),
+      })
+      if (res.ok) {
+        setActionMessage(`Transitioned to ${targetStatus}`)
+        await loadIncident()
+      } else {
+        const err = await res.json().catch(() => ({}))
+        setActionMessage(`Transition failed: ${err.detail || res.status}`)
+      }
+    } catch (e) {
+      setActionMessage('Network error during transition')
+    } finally {
+      setActionLoading('')
+    }
+  }
+
   if (loading) return <div style={{ color: 'var(--text-muted)', padding: 'var(--space-lg)' }}>Loading...</div>
   if (error) return <div style={{ color: 'var(--accent-red)', padding: 'var(--space-lg)' }}>{error}</div>
   if (!data) return null
 
   const { incident: inc, timeline, error_groups, council_analyses, runbook_executions, verification_runs, audit_trail } = data
+
+  // Determine valid transitions from current state
+  const validTransitions = {
+    DETECTED: ['TRIAGING'],
+    TRIAGING: ['INVESTIGATING'],
+    INVESTIGATING: ['DIAGNOSED', 'TRIAGING'],
+    DIAGNOSED: ['AWAITING_ACTION'],
+    AWAITING_ACTION: ['REMEDIATING', 'ESCALATED'],
+    REMEDIATING: ['VERIFYING', 'REMEDIATION_FAILED'],
+    VERIFYING: ['RESOLVED', 'REMEDIATION_FAILED'],
+    REMEDIATION_FAILED: ['ESCALATED'],
+    RESOLVED: [],
+    ESCALATED: [],
+  }
+
+  const pendingExecutions = runbook_executions.filter(e => e.status === 'PENDING')
+  const approvedExecutions = runbook_executions.filter(e => e.status === 'APPROVED')
 
   return (
     <div>
@@ -119,6 +231,52 @@ export default function IncidentDetail() {
           )}
         </div>
       </div>
+
+      {/* Action buttons */}
+      <div style={{ display: 'flex', gap: 'var(--space-sm)', marginBottom: 'var(--space-lg)', flexWrap: 'wrap' }}>
+        {/* Investigate button — only when no analyses exist yet */}
+        {council_analyses.length === 0 && inc.status !== 'RESOLVED' && (
+          <button
+            className="btn btn-primary"
+            onClick={handleInvestigate}
+            disabled={!!actionLoading}
+            style={{ fontSize: '12px' }}
+          >
+            {actionLoading === 'investigate' ? <Loader size={14} style={{ marginRight: '4px', animation: 'spin 1s linear infinite' }} /> : <Bot size={14} style={{ marginRight: '4px' }} />}
+            Run Investigation
+          </button>
+        )}
+
+        {/* State transition buttons */}
+        {(validTransitions[inc.status] || []).map(target => (
+          <button
+            key={target}
+            className="btn"
+            onClick={() => handleTransition(target)}
+            disabled={!!actionLoading}
+            style={{ fontSize: '12px' }}
+          >
+            {actionLoading === `transition-${target}` ? <Loader size={14} style={{ marginRight: '4px', animation: 'spin 1s linear infinite' }} /> : <ArrowLeft size={14} style={{ marginRight: '4px', transform: 'rotate(180deg)' }} />}
+            Transition → {target}
+          </button>
+        ))}
+
+        {/* Refresh */}
+        <button className="btn" onClick={loadIncident} disabled={loading} style={{ fontSize: '12px' }}>
+          <RefreshCw size={14} style={{ marginRight: '4px' }} /> Refresh
+        </button>
+      </div>
+
+      {/* Action message */}
+      {actionMessage && (
+        <div className="card" style={{
+          marginBottom: 'var(--space-md)', padding: 'var(--space-sm)',
+          borderColor: actionMessage.includes('failed') ? 'var(--accent-red)' : 'var(--accent-green)',
+          fontSize: '13px',
+        }}>
+          {actionMessage}
+        </div>
+      )}
 
       {/* Summary cards */}
       <div className="bento-grid" style={{ marginBottom: 'var(--space-lg)' }}>
@@ -147,6 +305,60 @@ export default function IncidentDetail() {
             <span className="card-title">ROOT CAUSE</span>
           </div>
           <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>{inc.root_cause}</p>
+        </div>
+      )}
+
+      {/* Pending Approvals */}
+      {pendingExecutions.length > 0 && (
+        <div className="card" style={{ marginBottom: 'var(--space-lg)', borderColor: 'var(--accent-orange)' }}>
+          <div className="card-header">
+            <span className="card-title" style={{ color: 'var(--accent-orange)' }}>PENDING APPROVALS</span>
+          </div>
+          {pendingExecutions.map(ex => (
+            <div key={ex.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'var(--space-sm)', borderBottom: '1px solid var(--border-subtle)' }}>
+              <div>
+                <span className="mono" style={{ fontSize: '12px' }}>Execution {ex.id.slice(0, 8)}</span>
+                <span style={{ color: 'var(--text-muted)', fontSize: '11px', marginLeft: '8px' }}>
+                  Created {ex.created_at ? formatDistanceToNow(new Date(ex.created_at), { addSuffix: true }) : ''}
+                </span>
+              </div>
+              <button
+                className="btn btn-primary"
+                onClick={() => handleApprove(ex.id)}
+                disabled={!!actionLoading}
+                style={{ fontSize: '12px', padding: '4px 12px' }}
+              >
+                {actionLoading === ex.id ? <Loader size={14} /> : <><Check size={14} style={{ marginRight: '4px' }} />Approve</>}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Approved Executions Ready to Run */}
+      {approvedExecutions.length > 0 && (
+        <div className="card" style={{ marginBottom: 'var(--space-lg)', borderColor: 'var(--accent-blue)' }}>
+          <div className="card-header">
+            <span className="card-title" style={{ color: 'var(--accent-blue)' }}>READY TO EXECUTE</span>
+          </div>
+          {approvedExecutions.map(ex => (
+            <div key={ex.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'var(--space-sm)', borderBottom: '1px solid var(--border-subtle)' }}>
+              <div>
+                <span className="mono" style={{ fontSize: '12px' }}>Execution {ex.id.slice(0, 8)}</span>
+                <span style={{ color: 'var(--text-muted)', fontSize: '11px', marginLeft: '8px' }}>
+                  Approved by {ex.approved_by || '—'}
+                </span>
+              </div>
+              <button
+                className="btn btn-primary"
+                onClick={() => handleExecute(ex.id)}
+                disabled={!!actionLoading}
+                style={{ fontSize: '12px', padding: '4px 12px' }}
+              >
+                {actionLoading === ex.id ? <Loader size={14} /> : <><Play size={14} style={{ marginRight: '4px' }} />Execute</>}
+              </button>
+            </div>
+          ))}
         </div>
       )}
 
@@ -208,6 +420,19 @@ export default function IncidentDetail() {
                       → {a.recommended_action.slice(0, 100)}
                     </div>
                   )}
+                  {a.evidence?.agents && (
+                    <div style={{ marginTop: '4px' }}>
+                      {a.evidence.agents.map((agent, i) => (
+                        <div key={i} style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                          <span className="mono" style={{ color: 'var(--accent-purple)' }}>{agent.role}</span>
+                          {' '}(conf: {(agent.confidence * 100).toFixed(0)}%)
+                          {agent.challenges?.length > 0 && (
+                            <span style={{ color: 'var(--accent-orange)' }}> · {agent.challenges.length} challenge(s)</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -222,7 +447,9 @@ export default function IncidentDetail() {
               {runbook_executions.map(ex => (
                 <div key={ex.id} style={{ padding: 'var(--space-sm)', borderBottom: '1px solid var(--border-subtle)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span className="mono" style={{ fontSize: '12px' }}>{ex.status}</span>
+                    <span className={`status-badge ${ex.status === 'SUCCEEDED' ? 'healthy' : ex.status === 'FAILED' ? 'unhealthy' : 'degraded'}`} style={{ fontSize: '11px' }}>
+                      {ex.status}
+                    </span>
                     <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                       {ex.approved_by || '—'}
                     </span>

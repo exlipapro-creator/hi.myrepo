@@ -552,6 +552,17 @@ class PipelineOrchestrator:
                 for s in similar if str(s.id) != str(incident.id)
             ]
 
+        # Get memory records for this fingerprint — institutional knowledge
+        if incident.fingerprint:
+            try:
+                from app.memory.engine import memory_engine
+                memory_records = await memory_engine.get_similar_incidents(
+                    incident.fingerprint, session, project_id=incident.project_id, limit=5
+                )
+                context["memory_records"] = memory_records
+            except Exception as e:
+                logger.warning("memory_search_failed", error=str(e))
+
         return context
 
     async def _evaluate_policy(

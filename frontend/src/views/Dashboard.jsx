@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Activity, AlertTriangle, CheckCircle, Clock, Zap, Eye, Brain, Play, RefreshCw, Shield } from 'lucide-react'
+import { Activity, AlertTriangle, CheckCircle, Clock, Zap, Eye, Brain, Play, RefreshCw, Shield, Loader } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { apiUrl } from '../utils/api.js'
 
@@ -35,26 +35,30 @@ export default function Dashboard() {
   const [projectHealth, setProjectHealth] = useState({})
   const [incidents, setIncidents] = useState([])
   const [events, setEvents] = useState([])
+  const [conditions, setConditions] = useState([])
   const [providers, setProviders] = useState([])
   const [runbooks, setRunbooks] = useState([])
+  const [pendingExecutions, setPendingExecutions] = useState([])
   const [loading, setLoading] = useState(true)
+  const [lastRefresh, setLastRefresh] = useState(null)
 
   useEffect(() => { loadData() }, [])
 
   async function loadData() {
     try {
-      const [projRes, incRes, evRes, provRes, rbRes] = await Promise.allSettled([
+      const [projRes, incRes, evRes, condRes, provRes, rbRes, execRes] = await Promise.allSettled([
         fetch(`${API}/projects`, { headers: authHeaders() }),
         fetch(`${API}/incidents?limit=10`, { headers: authHeaders() }),
         fetch(`${API}/events?limit=20`, { headers: authHeaders() }),
+        fetch(`${API}/events/aggregate?time_window=6h`, { headers: authHeaders() }),
         fetch(`${API}/providers`, { headers: authHeaders() }),
         fetch(`${API}/runbooks`, { headers: authHeaders() }),
+        fetch(`${API}/runbooks/executions?status=PENDING`, { headers: authHeaders() }),
       ])
 
       if (projRes.status === 'fulfilled' && projRes.value.ok) {
         const projData = await projRes.value.json()
         setProjects(projData)
-        // Fetch health for each project
         for (const p of projData) {
           try {
             const hRes = await fetch(`${API}/projects/${p.id}/health`, { headers: authHeaders() })
@@ -65,24 +69,43 @@ export default function Dashboard() {
           } catch {}
         }
       }
-      if (incRes.status === 'fulfilled' && incRes.value.ok) setIncidents(await incRes.value.json())
+
+      const incData = incRes.status === 'fulfilled' && incRes.value.ok ? await incRes.value.json() : {}
+      setIncidents(incData.incidents || (Array.isArray(incData) ? incData : []))
+
       if (evRes.status === 'fulfilled' && evRes.value.ok) {
         const data = await evRes.value.json()
         setEvents(data.events || [])
       }
+      if (condRes.status === 'fulfilled' && condRes.value.ok) {
+        const data = await condRes.value.json()
+        setConditions(data.conditions || [])
+      }
       if (provRes.status === 'fulfilled' && provRes.value.ok) setProviders(await provRes.value.json())
       if (rbRes.status === 'fulfilled' && rbRes.value.ok) setRunbooks(await rbRes.value.json())
+      if (execRes.status === 'fulfilled' && execRes.value.ok) {
+        const data = await execRes.value.json()
+        setPendingExecutions(data.executions || [])
+      }
     } catch (e) {
       console.error('Failed to load dashboard:', e)
-    } finally { setLoading(false) }
+    } finally {
+      setLoading(false)
+      setLastRefresh(new Date())
+    }
   }
 
-  const activeIncidents = Array.isArray(incidents) ? incidents.filter(i => i.status !== 'RESOLVED') : []
+  const allIncidents = Array.isArray(incidents) ? incidents : []
+  const activeIncidents = allIncidents.filter(i => i.status !== 'RESOLVED')
   const criticalCount = activeIncidents.filter(i => i.severity === 'critical').length
   const configuredProviders = providers.filter(p => p.status !== 'unknown').length
   const healthyProviders = providers.filter(p => p.status === 'healthy').length
   const totalTargets = Object.values(projectHealth).reduce((s, h) => s + (h.total_targets || 0), 0)
   const unhealthyTargets = Object.values(projectHealth).filter(h => h.health === 'unhealthy' || h.health === 'degraded').length
+
+  // Group conditions into operational view
+  const failureConditions = conditions.filter(c => c.event_type !== 'HEARTBEAT_SUCCESS')
+  const successConditions = conditions.filter(c => c.event_type === 'HEARTBEAT_SUCCESS')
 
   // ── Empty state ──────────────────────────────────────────────
   if (!loading && projects.length === 0) {
@@ -127,7 +150,7 @@ export default function Dashboard() {
         </div>
         <div className="card">
           <div className="card-header"><span className="card-title">HOW IT WORKS</span></div>
-          <div className="bento-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', padding: 'var(--space-sm)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', padding: 'var(--space-sm)', gap: 'var(--space-sm)' }}>
             {[
               { icon: <Eye size={24} />, title: 'Observe', desc: 'Ingest events, heartbeats, and telemetry' },
               { icon: <Brain size={24} />, title: 'Understand', desc: 'AI analyzes patterns and identifies root causes' },
@@ -151,9 +174,16 @@ export default function Dashboard() {
     <div>
       <div className="page-header">
         <h1>hi.myrepo // COMMAND CENTER</h1>
-        <span className="mono" style={{ color: 'var(--text-muted)' }}>
-          {new Date().toLocaleTimeString()}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
+          {lastRefresh && (
+            <span className="mono" style={{ color: 'var(--text-muted)', fontSize: '11px' }}>
+              Updated {formatDistanceToNow(lastRefresh, { addSuffix: true })}
+            </span>
+          )}
+          <button className="btn" onClick={loadData} disabled={loading} style={{ fontSize: '11px', padding: '2px 8px' }}>
+            <RefreshCw size={12} style={{ marginRight: '4px' }} /> Refresh
+          </button>
+        </div>
       </div>
 
       {/* ── Summary Metrics ─────────────────────────────────────── */}
@@ -188,13 +218,93 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="card">
-          <div className="card-title">Recent Events</div>
-          <div className="metric-value">{events.length}</div>
+          <div className="card-title">Pending Actions</div>
+          <div className="metric-value" style={{ color: pendingExecutions.length > 0 ? 'var(--accent-orange)' : 'var(--text-muted)' }}>
+            {pendingExecutions.length}
+          </div>
         </div>
       </div>
 
+      {/* ── Pending Approvals ───────────────────────────────────── */}
+      {pendingExecutions.length > 0 && (
+        <div className="card" style={{ marginBottom: 'var(--space-md)', borderColor: 'var(--accent-orange)' }}>
+          <div className="card-header">
+            <span className="card-title" style={{ color: 'var(--accent-orange)' }}>
+              <AlertTriangle size={14} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+              PENDING APPROVALS ({pendingExecutions.length})
+            </span>
+          </div>
+          <table className="responsive-table">
+            <thead>
+              <tr><th>Execution</th><th>Incident</th><th>Status</th><th>Created</th><th>Action</th></tr>
+            </thead>
+            <tbody>
+              {pendingExecutions.map(ex => (
+                <tr key={ex.id}>
+                  <td data-label="Execution" className="mono" style={{ fontSize: '12px' }}>{ex.id.slice(0, 8)}</td>
+                  <td data-label="Incident">
+                    <span
+                      style={{ color: 'var(--accent-blue)', cursor: 'pointer', fontSize: '12px' }}
+                      onClick={() => navigate(`/incidents/${ex.incident_id}`)}
+                    >
+                      {ex.incident_id.slice(0, 8)}
+                    </span>
+                  </td>
+                  <td data-label="Status"><span className="status-badge degraded">{ex.status}</span></td>
+                  <td data-label="Created" style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+                    {ex.created_at ? formatDistanceToNow(new Date(ex.created_at), { addSuffix: true }) : ''}
+                  </td>
+                  <td data-label="Action">
+                    <button className="btn btn-primary" onClick={() => navigate(`/incidents/${ex.incident_id}`)} style={{ fontSize: '11px', padding: '2px 8px' }}>
+                      Review →
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ── Operational Conditions (Aggregated) ──────────────────── */}
+      {failureConditions.length > 0 && (
+        <div className="card" style={{ marginBottom: 'var(--space-md)' }}>
+          <div className="card-header">
+            <span className="card-title">OPERATIONAL CONDITIONS</span>
+            <span className="mono" style={{ color: 'var(--text-muted)', fontSize: '11px' }}>
+              {failureConditions.length} condition{failureConditions.length !== 1 ? 's' : ''} (6h window)
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            {failureConditions.slice(0, 10).map((c, i) => (
+              <div key={i} style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: 'var(--space-sm)', borderRadius: 'var(--radius-sm)',
+                background: 'var(--bg-secondary)',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span className={`severity-badge ${c.severity || 'low'}`} style={{ minWidth: '50px', textAlign: 'center', fontSize: '10px' }}>
+                    {c.severity || '—'}
+                  </span>
+                  <span className="event-type" style={{ fontSize: '12px' }}>{c.event_type}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{c.source}</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <span className="mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    {c.occurrence_count}×
+                  </span>
+                  <span className="mono" style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    {c.last_seen ? formatDistanceToNow(new Date(c.last_seen), { addSuffix: true }) : ''}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── Projects + Event Spine ──────────────────────────────── */}
-      <div className="grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-md)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-md)' }}>
         <div className="card">
           <div className="card-header">
             <span className="card-title">PROJECTS</span>
