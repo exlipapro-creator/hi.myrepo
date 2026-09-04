@@ -4,6 +4,7 @@ hi.myrepo - Runbooks API
 Runbook management, proposal, approval, and execution tracking.
 """
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -32,6 +33,10 @@ class RunbookResponse(BaseModel):
 
 class RunbookApprovalRequest(BaseModel):
     approved_by: str
+
+
+class RunbookExecuteRequest(BaseModel):
+    target_url: str | None = None
 
 
 @router.get("", response_model=list[RunbookResponse])
@@ -141,6 +146,96 @@ async def approve_execution(
             }
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/executions/{execution_id}/execute")
+async def execute_runbook(
+    execution_id: uuid.UUID,
+    req: RunbookExecuteRequest,
+    user: TokenData = Depends(get_current_user),
+):
+    """Execute an approved runbook execution."""
+    from app.runbooks.executor import safe_executor
+
+    async with db_manager.get_session() as session:
+        exec_result = await session.execute(
+            select(RunbookExecution).where(RunbookExecution.id == execution_id)
+        )
+        execution = exec_result.scalar_one_or_none()
+        if not execution:
+            raise HTTPException(status_code=404, detail="Execution not found")
+        await require_incident_access(execution.incident_id, user)
+
+        if execution.status != RunbookExecutionStatus.APPROVED:
+            raise HTTPException(status_code=400, detail=f"Execution is not approved (status: {execution.status})")
+
+        # Transition to RUNNING
+        execution.status = RunbookExecutionStatus.RUNNING
+        execution.started_at = datetime.now(timezone.utc)
+        execution.audit_trail = {
+            **execution.audit_trail,
+            "execution_started": {
+                "started_by": user.user_id,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            },
+        }
+        await session.flush()
+
+        # Execute the safe operation
+        result = await safe_executor.execute(execution, session, target_url=req.target_url)
+
+        # Complete execution
+        execution.status = (
+            RunbookExecutionStatus.SUCCEEDED if result.success
+            else RunbookExecutionStatus.FAILED
+        )
+        execution.completed_at = datetime.now(timezone.utc)
+        execution.execution_log = [*execution.execution_log, {
+            "type": "execution_result",
+            "success": result.success,
+            "message": result.message,
+            "details": result.details,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }]
+        if not result.success:
+            execution.error_message = result.message
+
+        # Update runbook stats
+        from app.database.models import Runbook
+        rb_result = await session.execute(select(Runbook).where(Runbook.id == execution.runbook_id))
+        runbook = rb_result.scalar_one_or_none()
+        if runbook:
+            if result.success:
+                runbook.historical_success_count += 1
+            else:
+                runbook.historical_failure_count += 1
+
+        # Audit log
+        from app.database.models import AuditLog
+        audit = AuditLog(
+            id=uuid.uuid4(),
+            action="runbook.execution.completed" if result.success else "runbook.execution.failed",
+            actor_type="user",
+            actor_id=user.user_id,
+            resource_type="runbook_execution",
+            resource_id=str(execution.id),
+            incident_id=execution.incident_id,
+            details={
+                "success": result.success,
+                "message": result.message,
+            },
+            outcome="success" if result.success else "failure",
+        )
+        session.add(audit)
+        await session.flush()
+
+        return {
+            "execution_id": str(execution.id),
+            "status": execution.status,
+            "success": result.success,
+            "message": result.message,
+            "details": result.details,
+        }
 
 
 @router.get("/executions/{incident_id}")

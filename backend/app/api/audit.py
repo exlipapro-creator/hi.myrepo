@@ -24,17 +24,22 @@ async def list_audit_logs(
     resource_type: Optional[str] = None,
     project_id: Optional[uuid.UUID] = None,
     incident_id: Optional[uuid.UUID] = None,
+    outcome: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
     limit: int = Query(default=50, le=200),
     offset: int = Query(default=0, ge=0),
     user: TokenData = Depends(get_current_user),
 ):
-    """Query audit logs with filtering."""
+    """Query audit logs with filtering and server-side pagination."""
+    from datetime import datetime as dt
+
     if project_id:
         await require_project_access(project_id, user)
     else:
         user_project_ids = await get_user_project_ids(user)
         if not user_project_ids:
-            return {"logs": [], "total": 0, "limit": limit, "offset": offset}
+            return {"logs": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}
     async with db_manager.get_session() as session:
         query = select(AuditLog)
 
@@ -44,6 +49,8 @@ async def list_audit_logs(
             query = query.where(AuditLog.actor_type == actor_type)
         if resource_type:
             query = query.where(AuditLog.resource_type == resource_type)
+        if outcome:
+            query = query.where(AuditLog.outcome == outcome)
         if project_id:
             query = query.where(AuditLog.project_id == project_id)
         else:
@@ -51,6 +58,18 @@ async def list_audit_logs(
             query = query.where(AuditLog.project_id.in_(user_project_ids))
         if incident_id:
             query = query.where(AuditLog.incident_id == incident_id)
+        if from_date:
+            try:
+                from_dt = dt.fromisoformat(from_date.replace("Z", "+00:00"))
+                query = query.where(AuditLog.created_at >= from_dt)
+            except ValueError:
+                pass
+        if to_date:
+            try:
+                to_dt = dt.fromisoformat(to_date.replace("Z", "+00:00"))
+                query = query.where(AuditLog.created_at <= to_dt)
+            except ValueError:
+                pass
 
         # Count
         count_q = select(func.count()).select_from(query.subquery())
@@ -83,4 +102,5 @@ async def list_audit_logs(
             "total": total,
             "limit": limit,
             "offset": offset,
+            "has_more": (offset + limit) < total,
         }

@@ -321,13 +321,41 @@ class PipelineOrchestrator:
     def _determine_investigation_level(
         self, event: Event, result: PipelineResult
     ) -> InvestigationLevel:
-        """Determine the appropriate investigation depth."""
+        """Determine the appropriate investigation depth.
+
+        Adaptive escalation policy:
+        - Single heartbeat failure: CORRELATE (record and group)
+        - Repeated failures creating an incident: LIGHTWEIGHT_AI (first incident)
+        - Persistent incident (5+ failures): FULL_COUNCIL (Engineering Council)
+        - High severity: FULL_COUNCIL immediately
+        """
         severity = (event.severity or "low").lower()
 
         # Event type determines minimum level
         if event.event_type.startswith("HEARTBEAT_"):
             if event.event_type == "HEARTBEAT_SUCCESS":
                 return InvestigationLevel.OBSERVE
+
+            # Escalate based on incident state
+            # If an incident was just created (new) or updated, check its failure count
+            if result.incident:
+                incident = result.incident
+                # Check metadata for failure count from heartbeat pattern detection
+                failure_count = 0
+                if incident.metadata_ and "failure_count" in incident.metadata_:
+                    failure_count = incident.metadata_["failure_count"]
+
+                # Escalation policy:
+                # 3-4 failures: LIGHTWEIGHT_AI (single investigation)
+                # 5+ failures: FULL_COUNCIL (Engineering Council)
+                # High severity: FULL_COUNCIL immediately
+                if severity in ("high", "critical"):
+                    return InvestigationLevel.FULL_COUNCIL
+                elif failure_count >= 5:
+                    return InvestigationLevel.FULL_COUNCIL
+                elif failure_count >= 3:
+                    return InvestigationLevel.LIGHTWEIGHT_AI
+
             return InvestigationLevel.CORRELATE
 
         if event.event_type == "ERROR_DETECTED":
@@ -726,6 +754,13 @@ class PipelineOrchestrator:
                     f"Heartbeat failure pattern: {failure_count} failures this hour. "
                     f"Target: {target_url}"
                 )
+                # Store failure count in metadata for escalation policy
+                existing.metadata_ = {
+                    **existing.metadata_,
+                    "failure_count": failure_count,
+                    "last_failure_class": payload.get("failure_class", "unknown"),
+                    "last_status_code": payload.get("status_code", 0),
+                }
                 existing.updated_at = datetime.now(timezone.utc)
                 result.incident = existing
                 result.actions_taken.append("heartbeat_incident_updated")
@@ -748,11 +783,12 @@ class PipelineOrchestrator:
                     correlation_id=envelope.correlation_id,
                 )
                 incident = await incident_engine.create_incident(incident_data, session)
-                # Store target_id in metadata for recovery matching
+                # Store target_id in metadata for recovery matching and failure count for escalation
                 incident.metadata_ = {
                     **incident.metadata_,
                     "target_id": target_id,
                     "target_url": target_url,
+                    "failure_count": failure_count,
                 }
                 await session.flush()
                 result.incident = incident

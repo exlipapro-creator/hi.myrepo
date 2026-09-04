@@ -237,6 +237,65 @@ async def transition_incident(
             raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/{incident_id}/investigate")
+async def trigger_investigation(
+    incident_id: uuid.UUID,
+    user: TokenData = Depends(get_current_user),
+):
+    """Trigger AI investigation for an incident (manual trigger)."""
+    from app.database.connection import db_manager as dm
+    from app.council.engine import council_engine
+    from app.pipeline.orchestrator import PipelineOrchestrator
+
+    async with dm.get_session() as session:
+        result = await session.execute(
+            select(Incident).where(Incident.id == incident_id)
+        )
+        incident = result.scalar_one_or_none()
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        await require_project_access(incident.project_id, user)
+
+        # Build investigation context
+        orchestrator = PipelineOrchestrator()
+        context = await orchestrator._build_investigation_context(incident, session)
+
+        # Run council
+        verdict = await council_engine.investigate(incident, context)
+
+        # Persist analysis
+        analysis = IncidentAnalysis(
+            id=uuid.uuid4(),
+            incident_id=incident.id,
+            analysis_type="council",
+            root_cause=verdict.root_cause,
+            confidence=verdict.confidence,
+            evidence=verdict.evidence,
+            alternative_hypotheses=verdict.alternative_hypotheses,
+            blast_radius_assessment=verdict.blast_radius,
+            recommended_action=verdict.recommended_action,
+            risk_assessment=verdict.risk_assessment,
+            required_verification=verdict.required_verification,
+            council_rounds_used=verdict.council_rounds_used,
+            council_budget_exceeded=verdict.budget_exceeded,
+        )
+        session.add(analysis)
+
+        # Update incident
+        incident.confidence = verdict.confidence
+        incident.root_cause = verdict.root_cause
+        incident.blast_radius = verdict.blast_radius
+        await session.flush()
+
+        return {
+            "analysis_id": str(analysis.id),
+            "root_cause": verdict.root_cause,
+            "confidence": verdict.confidence,
+            "recommended_action": verdict.recommended_action,
+            "risk_assessment": verdict.risk_assessment,
+        }
+
+
 @router.get("/{incident_id}/analysis")
 async def get_incident_analysis(
     incident_id: uuid.UUID,

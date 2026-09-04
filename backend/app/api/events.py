@@ -162,18 +162,25 @@ async def list_events(
     event_type: Optional[str] = None,
     severity: Optional[str] = None,
     correlation_id: Optional[uuid.UUID] = None,
+    incident_id: Optional[uuid.UUID] = None,
+    target_id: Optional[str] = None,
+    source: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
     limit: int = Query(default=50, le=200),
     offset: int = Query(default=0, ge=0),
     user: TokenData = Depends(get_current_user),
 ):
-    """Query events with filtering."""
+    """Query events with filtering and server-side pagination."""
+    from datetime import datetime as dt
+
     if project_id:
         await require_project_access(project_id, user)
     else:
         # Scope to user's organization projects
         user_project_ids = await get_user_project_ids(user)
         if not user_project_ids:
-            return {"events": [], "total": 0, "limit": limit, "offset": offset}
+            return {"events": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}
 
     async with db_manager.get_session() as session:
         query = select(Event)
@@ -188,6 +195,26 @@ async def list_events(
             query = query.where(Event.severity == severity)
         if correlation_id:
             query = query.where(Event.correlation_id == correlation_id)
+        if incident_id:
+            query = query.where(Event.incident_id == incident_id)
+        if source:
+            query = query.where(Event.source == source)
+        if target_id:
+            # Filter by target_id in event payload JSONB
+            from sqlalchemy import cast, String as SAString
+            query = query.where(Event.payload["target_id"].astext == target_id)
+        if from_date:
+            try:
+                from_dt = dt.fromisoformat(from_date.replace("Z", "+00:00"))
+                query = query.where(Event.received_at >= from_dt)
+            except ValueError:
+                pass
+        if to_date:
+            try:
+                to_dt = dt.fromisoformat(to_date.replace("Z", "+00:00"))
+                query = query.where(Event.received_at <= to_dt)
+            except ValueError:
+                pass
 
         # Count
         count_query = select(func.count()).select_from(query.subquery())
@@ -219,6 +246,7 @@ async def list_events(
             "total": total,
             "limit": limit,
             "offset": offset,
+            "has_more": (offset + limit) < total,
         }
 
 

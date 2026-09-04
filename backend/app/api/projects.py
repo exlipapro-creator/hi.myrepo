@@ -61,7 +61,10 @@ class ProjectResponse(BaseModel):
 class ProjectHealthResponse(BaseModel):
     project_id: str
     name: str
-    health: str  # healthy, degraded, unhealthy, unknown
+    health: str  # healthy, degraded, unhealthy, unknown, no_targets, stopped
+    monitoring_status: str
+    total_targets: int
+    active_targets: int
     total_events: int
     active_incidents: int
     total_deployments: int
@@ -409,21 +412,39 @@ async def project_health(
 
         recent_error_rate = round(error_recent / total_recent, 4) if total_recent > 0 else 0.0
 
-        # Determine health
+        # Count monitored targets
+        total_targets = (await session.execute(
+            select(func.count()).where(MonitoredTarget.project_id == project_id)
+        )).scalar() or 0
+        active_targets = (await session.execute(
+            select(func.count()).where(
+                MonitoredTarget.project_id == project_id,
+                MonitoredTarget.is_active == True,
+            )
+        )).scalar() or 0
+
+        # Determine health — semantics-aware
         health = "healthy"
-        if active_incidents > 0:
+        if project.monitoring_status != "active":
+            health = "stopped"
+        elif total_targets == 0:
+            health = "no_targets"
+        elif active_incidents > 0:
             health = "degraded" if active_incidents < 3 else "unhealthy"
-        if unhealthy_deps > 0:
+        elif unhealthy_deps > 0:
             health = "degraded"
-        if recent_error_rate > 0.1:
+        elif recent_error_rate > 0.1:
             health = "degraded"
-        if recent_error_rate > 0.3:
+        elif recent_error_rate > 0.3:
             health = "unhealthy"
 
         return ProjectHealthResponse(
             project_id=str(project_id),
             name=project.name,
             health=health,
+            monitoring_status=project.monitoring_status,
+            total_targets=total_targets,
+            active_targets=active_targets,
             total_events=event_count,
             active_incidents=active_incidents,
             total_deployments=deployment_count,
