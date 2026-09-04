@@ -85,7 +85,7 @@ async def create_incident(
         }
 
 
-@router.get("", response_model=list[IncidentResponse])
+@router.get("")
 async def list_incidents(
     project_id: uuid.UUID | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
