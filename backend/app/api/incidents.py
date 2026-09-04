@@ -313,6 +313,27 @@ async def trigger_investigation(
         incident.confidence = verdict.confidence
         incident.root_cause = verdict.root_cause
         incident.blast_radius = verdict.blast_radius
+
+        # Audit the investigation
+        from app.database.models import AuditLog
+        import uuid as _uuid
+        audit = AuditLog(
+            id=_uuid.uuid4(),
+            action="analysis.created",
+            actor_type="user",
+            actor_id=user.user_id,
+            resource_type="incident",
+            resource_id=str(incident.id),
+            project_id=incident.project_id,
+            incident_id=incident.id,
+            details={
+                "analysis_type": "council",
+                "confidence": verdict.confidence,
+                "root_cause": verdict.root_cause[:200] if verdict.root_cause else None,
+            },
+            outcome="success",
+        )
+        session.add(audit)
         await session.flush()
 
         return {
