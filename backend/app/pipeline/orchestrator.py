@@ -780,6 +780,41 @@ class PipelineOrchestrator:
                     incident_id=str(existing.id),
                     failures_this_hour=failure_count,
                 )
+
+                # ── Escalation: run investigation when failure count crosses threshold
+                # This fires when an existing incident accumulates enough failures
+                # to warrant deeper investigation (the original event processing
+                # returned CORRELATE because no incident existed yet)
+                if failure_count >= 5 and severity in ("high", "critical"):
+                    # Build a synthetic event for council investigation
+                    class _SynthEvent:
+                        id = event.id if result.event else uuid.uuid4()
+                        event_type = envelope.event_type
+                        severity = severity
+                        source = envelope.source
+                        project_id = project_id
+                        fingerprint = fingerprint
+                    synth_event = _SynthEvent()
+                    try:
+                        await self._run_council_investigation(synth_event, session, result)
+                        result.actions_taken.append("escalated_to_council_on_existing_incident")
+                    except Exception as e:
+                        logger.warning("escalation_council_failed", error=str(e))
+                elif failure_count >= 3 and not any(a.startswith("lightweight") or a.startswith("council") for a in result.actions_taken):
+                    # First time crossing lightweight threshold
+                    class _SynthEvent2:
+                        id = event.id if result.event else uuid.uuid4()
+                        event_type = envelope.event_type
+                        severity = severity
+                        source = envelope.source
+                        project_id = project_id
+                        fingerprint = fingerprint
+                    synth_event2 = _SynthEvent2()
+                    try:
+                        await self._run_lightweight_investigation(synth_event2, session, result)
+                        result.actions_taken.append("escalated_to_lightweight_on_existing_incident")
+                    except Exception as e:
+                        logger.warning("escalation_lightweight_failed", error=str(e))
             else:
                 # Create a new incident from heartbeat failure pattern
                 severity = "high" if failure_count >= 5 else "medium"
