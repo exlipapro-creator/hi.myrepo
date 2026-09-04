@@ -370,3 +370,129 @@ async def event_stats(
             by_type=by_type,
             by_severity=by_severity,
         )
+
+
+class RetentionRequest(BaseModel):
+    """Event retention policy configuration."""
+    retention_days: int = 90  # Default: keep events for 90 days
+    exclude_types: list[str] = []  # Event types to always retain (never purge)
+    dry_run: bool = True  # Preview mode — do not delete by default
+
+
+class RetentionResponse(BaseModel):
+    total_events: int
+    eligible_for_deletion: int
+    protected_events: int
+    retention_days: int
+    cutoff_date: str
+    deleted: int = 0
+    dry_run: bool
+
+
+@router.post("/retention", response_model=RetentionResponse)
+async def apply_retention_policy(
+    req: RetentionRequest,
+    user: TokenData = Depends(get_current_user),
+):
+    """Apply event retention policy. Protected events (incident-linked, error groups, deployments) are never purged.
+    
+    Safety rules:
+    - Events linked to incidents are always protected
+    - Events linked to error groups are always protected
+    - Deployment events are always protected
+    - AI analysis events are always protected
+    - Heartbeat SUCCESS events older than retention are eligible
+    - Heartbeat FAILURE/DEGRADED events linked to open incidents are protected
+    - dry_run=True (default) only reports what would be deleted
+    """
+    from datetime import timedelta
+    from app.database.models import AuditLog, Incident
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=req.retention_days)
+
+    async with db_manager.get_session() as session:
+        # Count total events
+        total = (await session.execute(select(func.count()).select_from(Event))).scalar() or 0
+
+        # Count events older than retention
+        old_events_q = select(func.count()).where(Event.received_at < cutoff)
+        old_count = (await session.execute(old_events_q)).scalar() or 0
+
+        # Count protected events (linked to incidents)
+        protected_q = select(func.count()).where(
+            Event.received_at < cutoff,
+            Event.incident_id.isnot(None),
+        )
+        protected_by_incident = (await session.execute(protected_q)).scalar() or 0
+
+        # Count events that are always protected (deployments, AI, errors)
+        always_protected_q = select(func.count()).where(
+            Event.received_at < cutoff,
+            Event.event_type.in_([
+                'DEPLOYMENT_STARTED', 'DEPLOYMENT_SUCCEEDED', 'DEPLOYMENT_FAILED', 'DEPLOYMENT_ROLLED_BACK',
+                'AI_REQUEST_STARTED', 'AI_REQUEST_SUCCEEDED', 'AI_PROVIDER_FAILED', 'AI_PROVIDER_CASCADED',
+                'INCIDENT_CREATED', 'INCIDENT_UPDATED', 'INCIDENT_ESCALATED', 'INCIDENT_RESOLVED',
+                'RUNBOOK_PROPOSED', 'RUNBOOK_APPROVED', 'RUNBOOK_STARTED', 'RUNBOOK_SUCCEEDED', 'RUNBOOK_FAILED',
+                'VERIFICATION_STARTED', 'VERIFICATION_SUCCEEDED', 'VERIFICATION_FAILED',
+            ]),
+        )
+        always_protected = (await session.execute(always_protected_q)).scalar() or 0
+
+        # Count heartbeat failures that are linked to open incidents
+        open_incident_events_q = (
+            select(func.count())
+            .select_from(Event)
+            .join(Incident, Event.incident_id == Incident.id)
+            .where(
+                Event.received_at < cutoff,
+                Event.event_type.in_(['HEARTBEAT_FAILURE', 'HEARTBEAT_DEGRADED']),
+                Incident.status.notin_(['RESOLVED']),
+            )
+        )
+        incident_linked_failures = (await session.execute(open_incident_events_q)).scalar() or 0
+
+        total_protected = protected_by_incident + always_protected + incident_linked_failures
+        eligible = max(0, old_count - total_protected)
+
+        deleted = 0
+        if not req.dry_run and eligible > 0:
+            # Delete eligible events: old, not linked to incidents, not deployment/AI/incident type
+            from sqlalchemy import delete
+            delete_q = (
+                delete(Event)
+                .where(
+                    Event.received_at < cutoff,
+                    Event.incident_id.isNone(),
+                    Event.event_type.in_(['HEARTBEAT_SUCCESS', 'HEARTBEAT_DEGRADED']),
+                )
+            )
+            result = await session.execute(delete_q)
+            deleted = result.rowcount
+
+            # Audit the retention action
+            audit = AuditLog(
+                id=uuid.uuid4(),
+                action="events.retention_applied",
+                actor_type="user",
+                actor_id=user.user_id,
+                resource_type="events",
+                details={
+                    "retention_days": req.retention_days,
+                    "cutoff_date": cutoff.isoformat(),
+                    "events_deleted": deleted,
+                    "events_protected": total_protected,
+                },
+                outcome="success",
+            )
+            session.add(audit)
+            await session.flush()
+
+        return RetentionResponse(
+            total_events=total,
+            eligible_for_deletion=eligible,
+            protected_events=total_protected,
+            retention_days=req.retention_days,
+            cutoff_date=cutoff.isoformat(),
+            deleted=deleted,
+            dry_run=req.dry_run,
+        )

@@ -60,6 +60,128 @@ class ChatCompletionResponse(BaseModel):
 
 
 # ============================================================================
+# Structured AI Output Models
+# ============================================================================
+
+class AIAnalysisOutput(BaseModel):
+    """Structured output from AI incident analysis.
+    Distinguishes FACT / INFERENCE / HYPOTHESIS / UNKNOWN.
+    """
+    summary: str
+    probable_root_cause: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: list[str] = Field(default_factory=list)
+    alternative_hypotheses: list[str] = Field(default_factory=list)
+    recommended_next_steps: list[str] = Field(default_factory=list)
+    risk: str = "unknown"  # low, medium, high, critical
+    affected_components: list[str] = Field(default_factory=list)
+    blast_radius: str = "unknown"  # low, medium, high, critical
+    evidence_classification: dict = Field(default_factory=dict)  # fact/inference/hypothesis per item
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    analysis_type: str = "ai_analysis"
+
+
+def parse_structured_ai_output(
+    raw_content: str,
+    provider: str = "unknown",
+    model: str = "unknown",
+) -> Optional[AIAnalysisOutput]:
+    """Parse AI response into structured analysis output.
+    
+    Handles:
+    1. Direct JSON response
+    2. Markdown-wrapped JSON (```json ... ```)
+    3. Plain text fallback (extract key fields)
+    
+    Returns None if parsing fails completely.
+    """
+    import json
+    import re
+
+    if not raw_content:
+        return None
+
+    content = raw_content.strip()
+
+    # Strategy 1: Direct JSON parse
+    try:
+        data = json.loads(content)
+        return _build_analysis_from_dict(data, provider, model)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Strategy 2: Extract JSON from markdown code block
+    json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', content, re.DOTALL)
+    if json_match:
+        try:
+            data = json.loads(json_match.group(1))
+            return _build_analysis_from_dict(data, provider, model)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Strategy 3: Find first { ... } block in content
+    brace_match = re.search(r'\{[^{}]*\}', content, re.DOTALL)
+    if brace_match:
+        try:
+            data = json.loads(brace_match.group(0))
+            return _build_analysis_from_dict(data, provider, model)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Strategy 4: Plain text fallback — extract structured fields from prose
+    confidence = 0.5
+    conf_match = re.search(r'confidence[:\s]*(\d+\.?\d*)%?', content, re.IGNORECASE)
+    if conf_match:
+        try:
+            conf_val = float(conf_match.group(1))
+            confidence = conf_val / 100 if conf_val > 1 else conf_val
+        except ValueError:
+            pass
+
+    risk = "medium"
+    if any(w in content.lower() for w in ["critical", "severe", "urgent"]):
+        risk = "high"
+    elif any(w in content.lower() for w in ["low risk", "minor", "transient"]):
+        risk = "low"
+
+    return AIAnalysisOutput(
+        summary=content[:500],
+        probable_root_cause="Unable to extract structured root cause from AI response",
+        confidence=confidence,
+        evidence=[content[:200]],
+        risk=risk,
+        provider=provider,
+        model=model,
+        analysis_type="ai_analysis_text_fallback",
+    )
+
+
+def _build_analysis_from_dict(data: dict, provider: str, model: str) -> AIAnalysisOutput:
+    """Build AIAnalysisOutput from a parsed JSON dict with field normalization."""
+    confidence = float(data.get("confidence", data.get("confidence_score", 0.5)))
+    if confidence > 1:
+        confidence = confidence / 100  # Normalize percentage to 0-1
+    confidence = max(0.0, min(1.0, confidence))
+
+    return AIAnalysisOutput(
+        summary=str(data.get("summary", data.get("analysis", "No summary provided")))[:1000],
+        probable_root_cause=str(data.get("probable_root_cause", data.get("root_cause", data.get("cause", "Unknown"))))[:500],
+        confidence=confidence,
+        evidence=data.get("evidence", data.get("supporting_evidence", [])) or [],
+        alternative_hypotheses=data.get("alternative_hypotheses", data.get("alternatives", [])) or [],
+        recommended_next_steps=data.get("recommended_next_steps", data.get("recommendations", data.get("next_steps", []))) or [],
+        risk=str(data.get("risk", "medium")),
+        affected_components=data.get("affected_components", data.get("components", [])) or [],
+        blast_radius=str(data.get("blast_radius", "unknown")),
+        evidence_classification=data.get("evidence_classification", {}),
+        provider=provider,
+        model=model,
+        analysis_type="ai_analysis_structured",
+    )
+
+
+# ============================================================================
 # Circuit Breaker
 # ============================================================================
 
