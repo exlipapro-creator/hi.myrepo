@@ -189,7 +189,7 @@ export default function IncidentDetail() {
   if (error) return <div style={{ color: 'var(--accent-red)', padding: 'var(--space-lg)' }}>{error}</div>
   if (!data) return null
 
-  const { incident: inc, timeline, error_groups, council_analyses, runbook_executions, verification_runs, audit_trail } = data
+  const { incident: inc, timeline, error_groups, council_analyses, runbook_executions, verification_runs, audit_trail, memory_records } = data
 
   // Determine valid transitions from current state
   const validTransitions = {
@@ -497,6 +497,39 @@ export default function IncidentDetail() {
                   <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                     {al.actor_type} · {al.outcome || '—'}
                   </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Historical Memory */}
+          {memory_records && memory_records.length > 0 && (
+            <div className="card">
+              <div className="card-header">
+                <span className="card-title">HISTORICAL MEMORY</span>
+                <span className="mono" style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                  {memory_records.length} similar
+                </span>
+              </div>
+              {memory_records.map(m => (
+                <div key={m.id} style={{ padding: 'var(--space-sm)', borderBottom: '1px solid var(--border-subtle)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span className="mono" style={{ fontSize: '11px', color: 'var(--accent-purple)' }}>{m.category}</span>
+                    <span className={`status-badge ${m.success ? 'healthy' : 'unhealthy'}`} style={{ fontSize: '10px' }}>
+                      {m.success ? 'resolved' : 'failed'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px', marginTop: '2px' }}>{m.title}</div>
+                  {m.resolution && (
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                      Resolution: {m.resolution.slice(0, 80)}
+                    </div>
+                  )}
+                  {m.runbook_code && (
+                    <div className="mono" style={{ fontSize: '10px', color: 'var(--accent-blue)', marginTop: '2px' }}>
+                      {m.runbook_code}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

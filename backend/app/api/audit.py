@@ -27,6 +27,7 @@ async def list_audit_logs(
     outcome: Optional[str] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    exclude_pipeline: bool = Query(default=False, description="Exclude pipeline_processed noise"),
     limit: int = Query(default=50, le=200),
     offset: int = Query(default=0, ge=0),
     user: TokenData = Depends(get_current_user),
@@ -45,6 +46,8 @@ async def list_audit_logs(
 
         if action:
             query = query.where(AuditLog.action == action)
+        elif exclude_pipeline:
+            query = query.where(AuditLog.action.notlike("pipeline_%"))
         if actor_type:
             query = query.where(AuditLog.actor_type == actor_type)
         if resource_type:

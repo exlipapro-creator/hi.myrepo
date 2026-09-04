@@ -19,6 +19,9 @@ export default function Audit() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
+  // Quick filter: exclude pipeline noise by default
+  const [showPipeline, setShowPipeline] = useState(false)
+
   // Filters
   const [actionFilter, setActionFilter] = useState('')
   const [actorFilter, setActorFilter] = useState('')
@@ -34,6 +37,7 @@ export default function Audit() {
       params.set('limit', String(PAGE_SIZE))
       params.set('offset', String(newOffset))
       if (actionFilter) params.set('action', actionFilter)
+      else if (!showPipeline) params.set('exclude_pipeline', 'true')
       if (actorFilter) params.set('actor_type', actorFilter)
       if (resourceFilter) params.set('resource_type', resourceFilter)
       if (outcomeFilter) params.set('outcome', outcomeFilter)
@@ -54,7 +58,7 @@ export default function Audit() {
     } finally {
       setLoading(false)
     }
-  }, [actionFilter, actorFilter, resourceFilter, outcomeFilter])
+  }, [actionFilter, actorFilter, resourceFilter, outcomeFilter, showPipeline])
 
   useEffect(() => { loadLogs(0) }, [loadLogs])
 
@@ -78,6 +82,13 @@ export default function Audit() {
           >
             <Filter size={14} style={{ verticalAlign: 'middle', marginRight: '4px' }} />
             Filters
+          </button>
+          <button
+            className="btn"
+            onClick={() => { setShowPipeline(!showPipeline); setOffset(0) }}
+            style={{ fontSize: '12px', padding: '4px 8px', color: showPipeline ? 'var(--accent-orange)' : 'var(--text-muted)' }}
+          >
+            {showPipeline ? 'Hide Pipeline' : 'Show Pipeline'}
           </button>
         </div>
       </div>

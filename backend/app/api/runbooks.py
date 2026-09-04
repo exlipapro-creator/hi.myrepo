@@ -278,7 +278,7 @@ async def execute_runbook(
             else:
                 runbook.historical_failure_count += 1
 
-        # Audit log
+        # Audit log for execution
         from app.database.models import AuditLog
         audit = AuditLog(
             id=uuid.uuid4(),
@@ -297,12 +297,93 @@ async def execute_runbook(
         session.add(audit)
         await session.flush()
 
+        # Auto-trigger verification after successful execution
+        verification_result = None
+        if result.success and result.details.get("verification"):
+            verification_result = result.details["verification"]
+        elif result.success:
+            # Run independent verification
+            try:
+                from app.verification.engine import VerificationPlan, verification_engine
+                from app.database.models import Incident as IncModel, MonitoredTarget
+
+                inc_result = await session.execute(select(IncModel).where(IncModel.id == execution.incident_id))
+                inc = inc_result.scalar_one_or_none()
+                if inc:
+                    # Find the target URL from incident metadata or affected_component
+                    target_url = inc.affected_component or (inc.metadata_ or {}).get("target_url")
+                    checks = []
+                    if target_url:
+                        from app.verification.engine import VerificationCheck
+                        checks.append(VerificationCheck(
+                            name="health_check",
+                            check_type="health_check",
+                            target_url=target_url,
+                            timeout_seconds=10,
+                        ))
+                    if checks:
+                        plan = VerificationPlan(
+                            incident_id=execution.incident_id,
+                            execution_id=execution.id,
+                            verification_type="health_check",
+                            checks=checks,
+                            required_passes=3,
+                        )
+                        verification = await verification_engine.create_verification(plan, session)
+                        # Transition execution to verification state
+                        execution.status = RunbookExecutionStatus.VERIFICATION_RUNNING
+                        execution.execution_log = [*execution.execution_log, {
+                            "type": "verification_started",
+                            "verification_id": str(verification.id),
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }]
+                        await session.flush()
+
+                        vr = await verification_engine.run_verification(verification.id, plan, session)
+                        verification_result = {"success": vr.success, "checks_passed": vr.checks_passed}
+
+                        # Complete execution with verification result
+                        execution.status = (
+                            RunbookExecutionStatus.VERIFICATION_SUCCEEDED if vr.success
+                            else RunbookExecutionStatus.VERIFICATION_FAILED
+                        )
+                        execution.execution_log = [*execution.execution_log, {
+                            "type": "verification_completed",
+                            "success": vr.success,
+                            "checks_passed": vr.checks_passed,
+                            "checks_failed": vr.checks_failed,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }]
+
+                        # Audit verification
+                        v_audit = AuditLog(
+                            id=uuid.uuid4(),
+                            action="verification.completed" if vr.success else "verification.failed",
+                            actor_type="system",
+                            resource_type="verification",
+                            resource_id=str(verification.id),
+                            incident_id=execution.incident_id,
+                            details={
+                                "execution_id": str(execution.id),
+                                "success": vr.success,
+                                "checks_passed": vr.checks_passed,
+                                "checks_failed": vr.checks_failed,
+                            },
+                            outcome="success" if vr.success else "failure",
+                        )
+                        session.add(v_audit)
+                        await session.flush()
+            except Exception as e:
+                import structlog
+                structlog.get_logger().warning("auto_verification_failed", error=str(e))
+
         return {
             "execution_id": str(execution.id),
             "status": execution.status,
             "success": result.success,
             "message": result.message,
             "details": result.details,
+            "verification": verification_result,
         }
 
 

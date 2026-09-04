@@ -185,6 +185,39 @@ async def get_incident_full(
                 "details": {"status": incident.status},
             })
 
+        # Get memory records for this fingerprint
+        memory_records = []
+        if incident.fingerprint:
+            try:
+                from app.memory.engine import memory_engine
+                from app.database.models import MemoryRecord
+                mem_result = await session.execute(
+                    select(MemoryRecord)
+                    .where(MemoryRecord.fingerprint == incident.fingerprint)
+                    .where(MemoryRecord.project_id == incident.project_id)
+                    .order_by(MemoryRecord.created_at.desc())
+                    .limit(10)
+                )
+                mem_records = mem_result.scalars().all()
+                memory_records = [
+                    {
+                        "id": str(m.id),
+                        "category": m.category,
+                        "title": m.title,
+                        "summary": m.summary,
+                        "root_cause": m.root_cause,
+                        "resolution": m.resolution,
+                        "runbook_code": m.runbook_code,
+                        "success": m.success,
+                        "confidence_at_resolution": m.confidence_at_resolution,
+                        "created_at": m.created_at.isoformat() if m.created_at else None,
+                    }
+                    for m in mem_records
+                    if str(m.incident_id) != str(incident.id)
+                ]
+            except Exception:
+                pass
+
         return {
             "incident": {
                 "id": str(incident.id),
@@ -280,4 +313,5 @@ async def get_incident_full(
                 }
                 for al in audit_logs
             ],
+            "memory_records": memory_records,
         }
